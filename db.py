@@ -1,5 +1,5 @@
 """
-db.py — Persistence Layer (JSON I/O)
+db.py ΓÇö Persistence Layer (JSON I/O)
 
 Stores and retrieves game state as JSON-safe primitives.
 
@@ -38,7 +38,7 @@ AnyJSON = Any  # str | int | float | bool | None | list | dict
 
 
 # ---------------------------------------------------------------------------
-# Record DTOs — plain dataclasses returned to main.py
+# Record DTOs ΓÇö plain dataclasses returned to main.py
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -54,7 +54,7 @@ class GameRecord:
     player_id: str
     maze_id: str
     maze_version: str
-    state: dict[str, AnyJSON]       # opaque to db — engine owns the schema
+    state: dict[str, AnyJSON]       # opaque to db ΓÇö engine owns the schema
     status: str                      # "in_progress" | "completed"
     created_at: str
     updated_at: str
@@ -172,14 +172,51 @@ class JsonGameRepository(GameRepository):
                 pass
             return data
         return self._empty_store()
-
+        
     def _flush(self) -> None:
         """Write-then-rename for crash safety."""
-        tmp = self._path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, indent=2)
-        tmp.replace(self._path)
+        import os
+        import time
+        import tempfile
+        from pathlib import Path
 
+        path = Path(self._path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create a temporary file in the same directory to allow atomic replacement
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(path.parent),
+            prefix=path.name + ".",
+            suffix=".tmp",
+        )
+        tmp_path = Path(tmp_name)
+
+        try:
+            # Write the full JSON payload, then flush and fsync to ensure durability
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self._data, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Replace the target file; retry briefly if the filesystem reporst as temporarily unavailable
+            delays = [0.05, 0.10, 0.15, 0.25, 0.35, 0.50, 0.75]  # ~2.15s total
+            for d in delays:
+                try:
+                    os.replace(str(tmp_path), str(path))
+                    return
+                except PermissionError:
+                    time.sleep(d)
+
+            # Final attempt (raise if still locked) 
+            os.replace(str(tmp_path), str(path))
+
+        finally:
+            # Cleanup: remove the temporary file if it exists
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+    
     # -- Player ops --
 
     def get_player(self, player_id: str) -> Optional[PlayerRecord]:
@@ -282,7 +319,7 @@ class JsonGameRepository(GameRepository):
 
 
 # ---------------------------------------------------------------------------
-# Factory — future-proofs for SQLite backend
+# Factory ΓÇö future-proofs for SQLite backend
 # ---------------------------------------------------------------------------
 
 def open_repo(path: str | Path) -> GameRepository:
