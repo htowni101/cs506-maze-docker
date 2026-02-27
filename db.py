@@ -1,5 +1,5 @@
 """
-db.py ΓÇö Persistence Layer (JSON I/O)
+db.py — Persistence Layer (JSON I/O)
 
 Stores and retrieves game state as JSON-safe primitives.
 
@@ -38,7 +38,7 @@ AnyJSON = Any  # str | int | float | bool | None | list | dict
 
 
 # ---------------------------------------------------------------------------
-# Record DTOs ΓÇö plain dataclasses returned to main.py
+# Record DTOs — plain dataclasses returned to main.py
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -54,7 +54,7 @@ class GameRecord:
     player_id: str
     maze_id: str
     maze_version: str
-    state: dict[str, AnyJSON]       # opaque to db ΓÇö engine owns the schema
+    state: dict[str, AnyJSON]       # opaque to db — engine owns the schema
     status: str                      # "in_progress" | "completed"
     created_at: str
     updated_at: str
@@ -319,7 +319,7 @@ class JsonGameRepository(GameRepository):
 
 
 # ---------------------------------------------------------------------------
-# Factory ΓÇö future-proofs for SQLite backend
+# Factory — future-proofs for SQLite backend
 # ---------------------------------------------------------------------------
 
 def open_repo(path: str | Path) -> GameRepository:
