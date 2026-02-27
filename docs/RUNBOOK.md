@@ -1,194 +1,86 @@
-# Isometric Dungeon — RUNBOOK
+# RUNBOOK — The White Witch’s Labyrinth (Walking Skeleton)
 
-Operational guide for the walking skeleton.  
-Defines dependency rules, how to run the game, how to run tests, and what "done" means.
+This RUNBOOK defines the **operational contract** for the Walking Skeleton:
 
----
+- Module dependency rules
+- How to run the game (CLI)
+- P0 (critical) tests required to call the skeleton “done”
 
-## 1) Project Structure
-
-```
-walking_skeleton/
-├── maze.py                      # Domain logic — pure Python
-├── db.py                        # Persistence — JSON I/O
-├── main.py                      # Engine — the wiring + CLI
-├── test_maze_contract.py        # Tests for maze.py
-├── test_repo_contract.py        # Tests for db.py
-├── test_engine_integration.py   # Integration tests
-├── game_data.json               # (auto-created at runtime)
-└── docs/
-    ├── interfaces.md            # Interface contracts
-    ├── interface-tests.md       # Test specifications
-    └── RUNBOOK.md               # This file
-```
+This document is authoritative for Part 2 and Part 3 of the assignment.
 
 ---
 
-## 2) Dependency Rules
+## 1. Module Dependency Rules
 
-These rules are **non-negotiable**.  Violating them breaks module independence.
+Strict separation of concerns is mandatory.
 
-| Rule | Constraint |
-|------|-----------|
-| **R1** | `maze.py` imports **nothing** from `db` or `main` |
-| **R2** | `maze.py` never calls `print()` |
-| **R3** | `db.py` imports **nothing** from `maze` or `main` |
-| **R4** | `db.py` stores only JSON-serialisable primitives (`str`, `int`, `float`, `bool`, `None`, `list`, `dict`) |
-| **R5** | `main.py` is the **only** module that imports `maze` and `db` |
-| **R6** | `main.py` is the **only** module that calls `print()` or `input()` |
-| **R7** | Position objects are converted to `{"row": int, "col": int}` dicts **before** crossing into `db.py` |
-| **R8** | Enums are stored as their `.name` or `.value` string in the DB |
+### 1.1 maze.py — Domain Logic
 
-### Why these rules matter
+**May import:**
+- Standard library only (`dataclasses`, `typing`, `enum`, etc.)
 
-- **R1–R3**: Each module can be developed, tested, and replaced independently.
-- **R4, R7, R8**: The DB layer can switch from JSON to SQLite without touching maze.py.
-- **R5**: Single integration point — merge conflicts are localised to main.py.
-- **R6**: The UI can change (CLI → PyGame → PyQt) without modifying domain or persistence logic.
+**Must NOT import:**
+- `db.py`
+- `main.py`
+- Any I/O or framework code
 
----
+**Responsibilities:**
+- Represent the maze grid (3×3 for skeleton)
+- Track player position
+- Validate and apply movement
+- Expose state via domain objects
+- Convert domain state to/from primitive representations if required by design
 
-## 3) How to Run
-
-### Play the game (CLI)
-
-```bash
-cd walking_skeleton
-python main.py
-```
-
-Commands: `n`, `s`, `e`, `w`, `look`, `map`, `heal`, `save`, `quit`
-
-### Run all tests
-
-```bash
-cd walking_skeleton
-python -m pytest test_maze_contract.py test_repo_contract.py test_engine_integration.py -v
-```
-
-Or run individual suites:
-
-```bash
-python -m pytest test_maze_contract.py -v       # maze only
-python -m pytest test_repo_contract.py -v        # db only
-python -m pytest test_engine_integration.py -v   # full integration
-```
-
-### Run without pytest (stdlib unittest)
-
-```bash
-python -m unittest test_maze_contract -v
-python -m unittest test_repo_contract -v
-python -m unittest test_engine_integration -v
-```
+**Constraints:**
+- No `print()` or `input()`
+- No file access
+- Outputs data only
 
 ---
 
-## 4) P0 (Critical) Tests — Definition of Done
+### 1.2 db.py — Persistence Layer
 
-The project is "done" when **all** P0 tests pass.  These are the non-negotiable minimum.
+**May import:**
+- Standard library only (`json`, `pathlib`, `typing`, etc.)
 
-### P0 — Maze (`maze.py`)
+**Must NOT import:**
+- `maze.py`
+- `main.py`
 
-| ID     | Test                                | Why it's critical                              |
-|--------|-------------------------------------|------------------------------------------------|
-| M-302  | Start cell at (0,0)                | Game can't begin without a valid start         |
-| M-303  | Exit cell at (2,2)                 | Game can't be won without a valid exit         |
-| M-304  | All 9 cells exist                  | Maze must be structurally complete             |
-| M-309  | Available moves at start           | Proves wall/collision logic works              |
-| M-312  | Exit is reachable from start       | Game must be winnable                          |
-| M-313  | All pillars reachable              | All pillars must be collectible                |
-| M-C01  | No import of db                    | Boundary rule R1                               |
-| M-C03  | No print() calls                   | Boundary rule R2                               |
+**Responsibilities:**
+- Save game state to JSON
+- Load game state from JSON
+- Handle missing or corrupted save files gracefully
 
-### P0 — Database (`db.py`)
-
-| ID      | Test                               | Why it's critical                              |
-|---------|-------------------------------------|------------------------------------------------|
-| D-P01   | Create player                      | Can't play without a player record             |
-| D-G01   | Create game                        | Can't track state without a game record        |
-| D-G03   | Save game updates state            | Save/load is core persistence functionality    |
-| D-IO01  | Data survives reload               | Persistence must actually persist              |
-| D-C01   | No import of maze                  | Boundary rule R3                               |
-
-### P0 — Engine Integration (`main.py`)
-
-| ID     | Test                                | Why it's critical                              |
-|--------|-------------------------------------|------------------------------------------------|
-| E-I01  | Engine creates without error        | Basic wiring must work                         |
-| E-M01  | Valid move changes position         | Movement is the core game mechanic             |
-| E-M02  | Wall blocks movement                | Collision must work                            |
-| E-IT01 | Pillar pickup works                 | Must be able to collect pillars to win         |
-| E-W02  | Win with all pillars at exit        | Win condition is the game's objective          |
-| E-P01  | Save persists state                 | Save/load round-trip must work                 |
-| E-B01  | No maze types leak into DB state    | Boundary enforcement is architectural          |
-
-### Totals
-
-| Module   | P0 tests | Total tests |
-|----------|----------|-------------|
-| maze.py  | 8        | ~20         |
-| db.py    | 5        | ~14         |
-| main.py  | 7        | ~17         |
-| **Total**| **20**   | **~51**     |
+**Constraints:**
+- Store **JSON‑safe primitives only**
+- Convert dataclasses and enums to primitive forms
+- `load()` returns `None` if no valid save exists
 
 ---
 
-## 5) Development Workflow
+### 1.3 main.py — Engine / Controller
 
-### For each programmer:
+**May import:**
+- `maze.py`
+- `db.py`
+- Standard library
 
-1. **Pull** the walking skeleton branch
-2. **Read** `docs/interfaces.md` — understand the contract
-3. **Read** `docs/interface-tests.md` — understand what tests your module needs to pass
-4. **Write / modify** your assigned module (`maze.py`, `db.py`, or `main.py`)
-5. **Run** your module's test suite — make all tests pass
-6. **Push** to your feature branch
-7. **PR** against the skeleton branch — CI runs integration tests
+**Responsibilities:**
+- Composition root of the application
+- Create and wire domain and persistence objects
+- Run the CLI game loop
+- Handle all user input and output
+- Translate between domain objects and persistence DTOs
+- Save state after meaningful changes
+- Exit cleanly on user request
 
-### Branch strategy
-
-```
-main
- └── feature/walking-skeleton          ← this branch
-      ├── feature/maze-impl            ← maze.py developer
-      ├── feature/db-impl              ← db.py developer
-      └── feature/engine-impl          ← main.py developer
-```
-
-### Integration checklist
-
-Before merging any module branch:
-
-- [ ] All P0 tests for that module pass
-- [ ] No forbidden imports (checked by constraint tests)
-- [ ] No `print()` in maze.py or db.py
-- [ ] Full integration suite passes when combined with the other modules
+**Constraints:**
+- Only module allowed to use `print()` and `input()`
+- No domain rules implemented here
 
 ---
 
-## 6) Known Limitations (Walking Skeleton)
+## 2. Direction of Dependencies
 
-These are intentional scopes cuts for the skeleton:
-
-| Limitation                         | Resolution planned for            |
-|-----------------------------------|-----------------------------------|
-| Only 2 pillars (not 4)            | Expand when maze grows beyond 3×3 |
-| No vision potion mechanic         | Wire up in engine iteration 2     |
-| No isometric rendering            | PyGame frontend connects to same engine |
-| JSON-only persistence             | SQLite backend via `open_repo()`  |
-| No puzzle / question gates        | Add PuzzleRegistry + question bank |
-| No save-game resume               | Load existing `GameRecord` at startup |
-| No leaderboard UI                 | `top_scores()` is ready; needs display |
-
----
-
-## 7) Troubleshooting
-
-| Problem                        | Solution                                            |
-|-------------------------------|-----------------------------------------------------|
-| `ModuleNotFoundError: maze`    | Run from within the `walking_skeleton/` directory   |
-| `FileNotFoundError: game_data.json` | Normal on first run — file is auto-created    |
-| Tests fail with `ImportError`  | Ensure `pytest` is installed: `pip install pytest`  |
-| JSON file corrupted            | Delete `game_data.json` and restart                 |
-| `KeyError` in db.py           | Ensure `game_id` exists before calling `save_game`  |
+The allowed dependency direction is strictly one‑way:
