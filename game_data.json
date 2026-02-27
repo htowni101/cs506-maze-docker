@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "players": {
+    "3b5202f9-dcf5-4849-9628-6ae1d589987e": {
+      "id": "3b5202f9-dcf5-4849-9628-6ae1d589987e",
+      "handle": "toop",
+      "created_at": "2026-02-26T05:51:19.698327Z"
+    },
+    "72b952cb-aa40-4064-a702-2f5f8e229e0f": {
+      "id": "72b952cb-aa40-4064-a702-2f5f8e229e0f",
+      "handle": "Gorp",
+      "created_at": "2026-02-26T08:08:40.819353Z"
+    },
+    "327cf5ed-698f-4876-af5b-639cde761ffa": {
+      "id": "327cf5ed-698f-4876-af5b-639cde761ffa",
+      "handle": "pointy",
+      "created_at": "2026-02-26T08:23:49.783851Z"
+    }
+  },
+  "games": {
+    "90ee1703-4ec4-4462-9ada-e3c375bc7be7": {
+      "id": "90ee1703-4ec4-4462-9ada-e3c375bc7be7",
+      "player_id": "3b5202f9-dcf5-4849-9628-6ae1d589987e",
+      "maze_id": "maze-3x3-v1",
+      "maze_version": "1.0",
+      "state": {
+        "pos": {
+          "row": 2,
+          "col": 2
+        },
+        "move_count": 6,
+        "hp": 100,
+        "max_hp": 100,
+        "healing_potions": 1,
+        "vision_potions": 0,
+        "pillars_found": [
+          "pillar_a",
+          "pillar_e"
+        ],
+        "visited": [
+          {
+            "row": 0,
+            "col": 1
+          },
+          {
+            "row": 1,
+            "col": 2
+          },
+          {
+            "row": 2,
+            "col": 1
+          },
+          {
+            "row": 0,
+            "col": 0
+          },
+          {
+            "row": 0,
+            "col": 2
+          },
+          {
+            "row": 2,
+            "col": 2
+          }
+        ],
+        "is_complete": true,
+        "is_dead": false
+      },
+      "status": "completed",
+      "created_at": "2026-02-26T05:51:19.700627Z",
+      "updated_at": "2026-02-26T05:52:07.746625Z"
+    },
+    "d6b1d7f2-d18d-4508-af59-a1c13e2dc152": {
+      "id": "d6b1d7f2-d18d-4508-af59-a1c13e2dc152",
+      "player_id": "72b952cb-aa40-4064-a702-2f5f8e229e0f",
+      "maze_id": "maze-3x3-v1",
+      "maze_version": "1.0",
+      "state": {
+        "pos": {
+          "row": 0,
+          "col": 2
+        },
+        "move_count": 2,
+        "hp": 100,
+        "max_hp": 100,
+        "healing_potions": 0,
+        "vision_potions": 0,
+        "npc_states": {
+          "old_weary": {
+            "npc_id": "old_weary",
+            "emotional_state": -1,
+            "resolved": false,
+            "resolution": "",
+            "last_emotion_category": "happy",
+            "interaction_count": 7
+          },
+          "messy_goblin": {
+            "npc_id": "messy_goblin",
+            "emotional_state": 0,
+            "resolved": false,
+            "resolution": "",
+            "last_emotion_category": "",
+            "interaction_count": 0
+          }
+        },
+        "npc_greeted": [
+          "old_weary"
+        ],
+        "visited": [
+          {
+            "row": 0,
+            "col": 1
+          },
+          {
+            "row": 0,
+            "col": 2
+          },
+          {
+            "row": 0,
+            "col": 0
+          }
+        ],
+        "is_complete": false,
+        "is_dead": false,
+        "escape_impossible": false
+      },
+      "status": "in_progress",
+      "created_at": "2026-02-26T08:08:40.822619Z",
+      "updated_at": "2026-02-26T08:23:42.835625Z"
+    },
+    "55df2d1f-ebae-4187-8cef-0fdb7b1fbb7e": {
+      "id": "55df2d1f-ebae-4187-8cef-0fdb7b1fbb7e",
+      "player_id": "327cf5ed-698f-4876-af5b-639cde761ffa",
+      "maze_id": "maze-3x3-v1",
+      "maze_version": "1.0",
+      "state": {
+        "pos": {
+          "row": 0,
+          "col": 0
+        },
+        "move_count": 0,
+        "hp": 100,
+        "max_hp": 100,
+        "healing_potions": 0,
+        "vision_potions": 0,
+        "npc_states": {},
+        "npc_greeted": [],
+        "visited": [
+          {
+            "row": 0,
+            "col": 0
+          }
+        ],
+        "is_complete": false,
+        "is_dead": false,
+        "escape_impossible": false
+      },
+      "status": "in_progress",
+      "created_at": "2026-02-26T08:23:49.786074Z",
+      "updated_at": "2026-02-26T08:23:49.786074Z"
+    }
+  },
+  "scores": {
+    "69d2a55e-0b7a-4c5c-9036-859fba0af57b": {
+      "id": "69d2a55e-0b7a-4c5c-9036-859fba0af57b",
+      "player_id": "3b5202f9-dcf5-4849-9628-6ae1d589987e",
+      "game_id": "90ee1703-4ec4-4462-9ada-e3c375bc7be7",
+      "maze_id": "maze-3x3-v1",
+      "maze_version": "1.0",
+      "metrics": {
+        "move_count": 6,
+        "hp_remaining": 100,
+        "pillars": [
+          "pillar_a",
+          "pillar_e"
+        ]
+      },
+      "created_at": "2026-02-26T05:52:07.744435Z"
+    }
+  }
+}
