@@ -83,6 +83,7 @@ class CellSpec:
     has_pit: bool = False
     has_healing_potion: bool = False
     has_vision_potion: bool = False
+    tile_type: Optional[str] = None         # e.g. "floor", "ne_wall", "sw_dead"
 
     # --- convenience helpers (no print!) ---
     def is_passable(self, direction: Direction) -> bool:
@@ -316,4 +317,123 @@ def build_square_maze(size: int, seed: int) -> Maze:
         cells=cells,
         start=Position(0, 0),
         exit_pos=Position(size - 1, size - 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Dungeon-backed factory (procedural rooms + corridors)
+# ---------------------------------------------------------------------------
+
+def build_dungeon_maze(
+    seed: int,
+    width: int = 60,
+    height: int = 40,
+    max_rooms: int = 12,
+    min_room_size: int = 4,
+    max_room_size: int = 8,
+) -> Maze:
+    """
+    Generate a procedural dungeon via ``dungeon.generate_dungeon`` and
+    wrap it in a :class:`Maze` object.
+
+    Each floor tile (``'.'``) in the dungeon map becomes a :class:`CellSpec`.
+    Walls are inferred from adjacency — if a neighbour in a cardinal
+    direction is not a floor tile, that direction is blocked.
+
+    Start = centre of the first room.
+    Exit  = centre of the last room.
+    NPCs are placed in the centres of intermediate rooms.
+    """
+    # Create a seeded RNG so dungeon.generate_dungeon is deterministic.
+    rng = random.Random(seed)
+
+    from dungeon import generate_dungeon  # local import to respect constraints
+
+    dungeon_map, tile_types, rooms = generate_dungeon(
+        width, height, max_rooms, min_room_size, max_room_size, rng=rng,
+    )
+
+    # Build CellSpec for every floor tile
+    cells: dict[Position, CellSpec] = {}
+    for row in range(height):
+        for col in range(width):
+            if dungeon_map[row][col] != '.':
+                continue
+            pos = Position(row, col)
+            blocked: set[Direction] = set()
+            for d in Direction:
+                nr, nc = row + d.dr, col + d.dc
+                if not (0 <= nr < height and 0 <= nc < width):
+                    blocked.add(d)
+                elif dungeon_map[nr][nc] != '.':
+                    blocked.add(d)
+            cells[pos] = CellSpec(
+                pos=pos,
+                blocked=blocked,
+                tile_type=tile_types[row][col],
+            )
+
+    # Choose start / exit from rooms
+    if not rooms:
+        # Fallback: pick first and last floor positions
+        all_pos = sorted(cells.keys(), key=lambda p: (p.row, p.col))
+        start = all_pos[0]
+        exit_pos = all_pos[-1]
+    else:
+        start = Position(rooms[0].center_y, rooms[0].center_x)
+        exit_pos = Position(rooms[-1].center_y, rooms[-1].center_x)
+
+    # Ensure start / exit are actually valid floor tiles
+    if start not in cells:
+        start = min(cells.keys(), key=lambda p: abs(p.row - start.row) + abs(p.col - start.col))
+    if exit_pos not in cells:
+        exit_pos = min(cells.keys(), key=lambda p: abs(p.row - exit_pos.row) + abs(p.col - exit_pos.col))
+
+    cells[start] = CellSpec(
+        pos=start,
+        kind=CellKind.START,
+        blocked=cells[start].blocked,
+        tile_type=cells[start].tile_type,
+    )
+    cells[exit_pos] = CellSpec(
+        pos=exit_pos,
+        kind=CellKind.EXIT,
+        blocked=cells[exit_pos].blocked,
+        tile_type=cells[exit_pos].tile_type,
+    )
+
+    # Place NPCs in intermediate rooms
+    rng = random.Random(seed)
+    npc_ids = ["old_weary", "messy_goblin"]
+    npc_rooms = rooms[1:-1] if len(rooms) > 2 else rooms[1:] if len(rooms) > 1 else []
+    rng.shuffle(npc_rooms)
+    for i, npc_id in enumerate(npc_ids):
+        if i >= len(npc_rooms):
+            break
+        npc_pos = Position(npc_rooms[i].center_y, npc_rooms[i].center_x)
+        if npc_pos in cells:
+            cells[npc_pos].npc_id = npc_id
+
+    # Place a pit and healing potion in other intermediate rooms
+    item_rooms = [r for r in rooms if Position(r.center_y, r.center_x) != start
+                  and Position(r.center_y, r.center_x) != exit_pos
+                  and Position(r.center_y, r.center_x) in cells
+                  and cells[Position(r.center_y, r.center_x)].npc_id is None]
+    rng.shuffle(item_rooms)
+    if item_rooms:
+        pit_pos = Position(item_rooms[0].center_y, item_rooms[0].center_x)
+        cells[pit_pos].has_pit = True
+    if len(item_rooms) > 1:
+        heal_pos = Position(item_rooms[1].center_y, item_rooms[1].center_x)
+        cells[heal_pos].has_healing_potion = True
+
+    maze_id = f"dungeon-{width}x{height}-seed{seed}"
+    return Maze(
+        maze_id=maze_id,
+        maze_version="1.0",
+        width=width,
+        height=height,
+        cells=cells,
+        start=start,
+        exit_pos=exit_pos,
     )

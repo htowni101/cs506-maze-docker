@@ -15,6 +15,16 @@
       "id": "327cf5ed-698f-4876-af5b-639cde761ffa",
       "handle": "pointy",
       "created_at": "2026-02-26T08:23:49.783851Z"
+    },
+    "8911b9ab-1f8d-405e-9a88-e228c0502a75": {
+      "id": "8911b9ab-1f8d-405e-9a88-e228c0502a75",
+      "handle": "toto",
+      "created_at": "2026-03-03T05:05:20.767312Z"
+    },
+    "2fafc9a8-2e3f-4cbf-a751-a74327d0eada": {
+      "id": "2fafc9a8-2e3f-4cbf-a751-a74327d0eada",
+      "handle": "gom",
+      "created_at": "2026-03-04T02:53:59.127314Z"
     }
   },
   "games": {
@@ -158,6 +168,85 @@
       "status": "in_progress",
       "created_at": "2026-02-26T08:23:49.786074Z",
       "updated_at": "2026-02-26T08:23:49.786074Z"
+    },
+    "6a1c6847-9981-4183-845e-c4a50f50d362": {
+      "id": "6a1c6847-9981-4183-845e-c4a50f50d362",
+      "player_id": "8911b9ab-1f8d-405e-9a88-e228c0502a75",
+      "maze_id": "maze-3x3-v1",
+      "maze_version": "1.0",
+      "state": {
+        "pos": {
+          "row": 0,
+          "col": 0
+        },
+        "move_count": 0,
+        "hp": 100,
+        "max_hp": 100,
+        "healing_potions": 0,
+        "vision_potions": 0,
+        "npc_states": {},
+        "npc_greeted": [],
+        "visited": [
+          {
+            "row": 0,
+            "col": 0
+          }
+        ],
+        "is_complete": false,
+        "is_dead": false,
+        "escape_impossible": false
+      },
+      "status": "in_progress",
+      "created_at": "2026-03-03T05:05:20.783293Z",
+      "updated_at": "2026-03-03T05:05:20.783293Z"
+    },
+    "6796d123-20db-445d-9f58-760882f2d499": {
+      "id": "6796d123-20db-445d-9f58-760882f2d499",
+      "player_id": "2fafc9a8-2e3f-4cbf-a751-a74327d0eada",
+      "maze_id": "maze-3x3-v1",
+      "maze_version": "1.0",
+      "state": {
+        "pos": {
+          "row": 0,
+          "col": 0
+        },
+        "move_count": 0,
+        "hp": 100,
+        "max_hp": 100,
+        "healing_potions": 0,
+        "vision_potions": 0,
+        "npc_states": {
+          "old_weary": {
+            "npc_id": "old_weary",
+            "emotional_state": 0,
+            "resolved": false,
+            "resolution": "",
+            "last_emotion_category": "",
+            "interaction_count": 0
+          },
+          "messy_goblin": {
+            "npc_id": "messy_goblin",
+            "emotional_state": 0,
+            "resolved": false,
+            "resolution": "",
+            "last_emotion_category": "",
+            "interaction_count": 0
+          }
+        },
+        "npc_greeted": [],
+        "visited": [
+          {
+            "row": 0,
+            "col": 0
+          }
+        ],
+        "is_complete": false,
+        "is_dead": false,
+        "escape_impossible": false
+      },
+      "status": "in_progress",
+      "created_at": "2026-03-04T02:53:59.438407Z",
+      "updated_at": "2026-03-04T02:54:22.304625Z"
     }
   },
   "scores": {
