@@ -34,11 +34,8 @@ from maze import (
     build_square_maze,
 )
 from db import (
-    GameRepository,
-    JsonGameRepository,
-    open_repo,
-    PlayerRecord,
-    GameRecord,
+    GameRepository,    
+    open_repo,        
 )
 from npc_data import (
     NPCState,
@@ -683,7 +680,7 @@ def _print_output(output: GameOutput) -> bool:
     return False
 
 
-def run_cli(maze: Optional[Maze] = None, db_path: str = "game_data.json") -> None:
+def run_cli(maze: Optional[Maze] = None, db_path: str = "game_data.db") -> None:
     """
     Main CLI loop.  Wires maze + db + engine, then reads input / prints output.
     Redraws dungeon and controls after every input.
@@ -694,7 +691,7 @@ def run_cli(maze: Optional[Maze] = None, db_path: str = "game_data.json") -> Non
     repo = open_repo(db_path)
 
     # Player setup
-    print("=== Isometric Dungeon — Walking Skeleton ===")
+    print("=== Isometric Dungeon — MVP ===")
     handle = input("Enter your name: ").strip() or "Hero"
     player = repo.get_or_create_player(handle)
 
