@@ -23,6 +23,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+import view
+
 # --- Module imports (main.py is the ONLY place these happen) ---
 from maze import (
     Maze,
@@ -669,14 +671,14 @@ def _print_output(output: GameOutput) -> bool:
         print()
         print(v.map_text)
     print()
-    print(_render_status_bar(v))
+    print(view.render_status_bar(v.__dict__))
 
     if v.npc_here and v.npc_name:
         emotion_bar = "=" * max(0, v.npc_emotion + 3) if v.npc_emotion is not None else ""
         emotion_val = v.npc_emotion if v.npc_emotion is not None else 0
         print(f"{v.npc_name} is here.  Mood: [{emotion_val:+d}] {'█' * max(0, emotion_val + 3)}{'░' * max(0, 3 - emotion_val)}")
 
-    print(_render_controls(v))
+    print(view.render_controls(v.__dict__))
     return False
 
 
