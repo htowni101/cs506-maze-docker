@@ -1,11 +1,10 @@
 """
-test_maze_contract.py — Maze Domain Contract Tests
+test_maze_contract.py -- Maze Domain Contract Tests
 
-Tests ONLY maze.py.  Validates public types, the 3×3 factory, the
-procedural factory, and the architectural constraints.
+Tests ONLY maze.py.  Validates public types, the 3x3 factory, the
+procedural factory, build_dungeon_maze, and the architectural constraints.
 """
 import ast
-import textwrap
 import unittest
 from collections import deque
 from pathlib import Path
@@ -18,6 +17,7 @@ from maze import (
     Maze,
     build_3x3_maze,
     build_square_maze,
+    build_dungeon_maze,
 )
 
 
@@ -34,9 +34,13 @@ def _bfs_reachable(maze: Maze, start: Position) -> set[Position]:
         pos = queue.popleft()
         for d in maze.available_moves(pos):
             nb = pos.moved(d)
-            if nb not in visited and nb in maze._cells:
-                visited.add(nb)
-                queue.append(nb)
+            if nb not in visited:
+                try:
+                    maze.cell(nb)
+                    visited.add(nb)
+                    queue.append(nb)
+                except KeyError:
+                    pass
     return visited
 
 
@@ -45,7 +49,7 @@ def _bfs_reachable(maze: Maze, start: Position) -> set[Position]:
 # ===================================================================
 
 class TestDirectionEnum(unittest.TestCase):
-    """M-T01 … M-T03"""
+    """M-T01 ... M-T03"""
 
     def test_four_members(self):  # M-T01
         self.assertEqual(set(Direction), {Direction.N, Direction.S, Direction.E, Direction.W})
@@ -64,14 +68,14 @@ class TestDirectionEnum(unittest.TestCase):
 
 
 class TestPosition(unittest.TestCase):
-    """M-T04 … M-T06"""
+    """M-T04 ... M-T06"""
 
     def test_frozen_and_hashable(self):  # M-T04
         p = Position(0, 0)
         s = {p, Position(0, 0), Position(1, 1)}
         self.assertEqual(len(s), 2)
         with self.assertRaises(AttributeError):
-            p.row = 5  # type: ignore[misc]
+            p.row = 5
 
     def test_moved(self):  # M-T05
         self.assertEqual(Position(1, 1).moved(Direction.N), Position(0, 1))
@@ -95,14 +99,22 @@ class TestCellKind(unittest.TestCase):
 
 
 class TestCellSpec(unittest.TestCase):
-    """M-T08"""
+    """M-T08, M-T09"""
 
-    def test_is_passable(self):
+    def test_is_passable(self):  # M-T08
         spec = CellSpec(pos=Position(0, 0), blocked={Direction.N, Direction.W})
         self.assertFalse(spec.is_passable(Direction.N))
         self.assertFalse(spec.is_passable(Direction.W))
         self.assertTrue(spec.is_passable(Direction.S))
         self.assertTrue(spec.is_passable(Direction.E))
+
+    def test_tile_type_default_none(self):  # M-T09
+        spec = CellSpec(pos=Position(0, 0))
+        self.assertIsNone(spec.tile_type)
+
+    def test_tile_type_custom(self):  # M-T10
+        spec = CellSpec(pos=Position(0, 0), tile_type="room")
+        self.assertEqual(spec.tile_type, "room")
 
 
 # ===================================================================
@@ -110,7 +122,7 @@ class TestCellSpec(unittest.TestCase):
 # ===================================================================
 
 class TestBuild3x3Maze(unittest.TestCase):
-    """M-301 … M-313"""
+    """M-301 ... M-313"""
 
     @classmethod
     def setUpClass(cls):
@@ -145,9 +157,7 @@ class TestBuild3x3Maze(unittest.TestCase):
         self.assertIn(Direction.S, self.maze.cell(Position(0, 1)).blocked)
 
     def test_walls_symmetric(self):  # M-308
-        # (0,1)→S blocked ⇒ (1,1)→N blocked
         self.assertIn(Direction.N, self.maze.cell(Position(1, 1)).blocked)
-        # (2,0)→E blocked ⇒ (2,1)→W blocked
         self.assertIn(Direction.W, self.maze.cell(Position(2, 1)).blocked)
 
     def test_available_moves_at_start(self):  # M-309
@@ -183,7 +193,7 @@ class TestBuild3x3Maze(unittest.TestCase):
 # ===================================================================
 
 class TestBuildSquareMaze(unittest.TestCase):
-    """M-S01 … M-S07"""
+    """M-S01 ... M-S07"""
 
     def test_dimensions(self):  # M-S01
         m = build_square_maze(5, seed=42)
@@ -223,11 +233,75 @@ class TestBuildSquareMaze(unittest.TestCase):
 
 
 # ===================================================================
-# 4) Constraint enforcement
+# 4) build_dungeon_maze(seed) contract
+# ===================================================================
+
+class TestBuildDungeonMaze(unittest.TestCase):
+    """M-D01 ... M-D10"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.maze = build_dungeon_maze(seed=42)
+
+    def test_has_cells(self):  # M-D01
+        self.assertGreater(len(self.maze.all_cells()), 0)
+
+    def test_start_is_passable(self):  # M-D02
+        start = self.maze.cell(self.maze.start)
+        self.assertEqual(start.kind, CellKind.START)
+
+    def test_exit_is_passable(self):  # M-D03
+        exit_cell = self.maze.cell(self.maze.exit)
+        self.assertEqual(exit_cell.kind, CellKind.EXIT)
+
+    def test_exit_reachable_from_start(self):  # M-D04
+        reachable = _bfs_reachable(self.maze, self.maze.start)
+        self.assertIn(self.maze.exit, reachable)
+
+    def test_two_npcs_placed(self):  # M-D05
+        npc_cells = [c for c in self.maze.all_cells() if c.npc_id is not None]
+        self.assertEqual(len(npc_cells), 2)
+
+    def test_npcs_reachable(self):  # M-D06
+        reachable = _bfs_reachable(self.maze, self.maze.start)
+        for cell in self.maze.all_cells():
+            if cell.npc_id:
+                self.assertIn(cell.pos, reachable, f"{cell.npc_id} unreachable")
+
+    def test_deterministic(self):  # M-D07
+        m2 = build_dungeon_maze(seed=42)
+        cells1 = sorted(self.maze.all_positions(), key=lambda p: (p.row, p.col))
+        cells2 = sorted(m2.all_positions(), key=lambda p: (p.row, p.col))
+        self.assertEqual(cells1, cells2)
+
+    def test_different_seed_different_layout(self):  # M-D08
+        m2 = build_dungeon_maze(seed=99)
+        pos1 = frozenset(self.maze.all_positions())
+        pos2 = frozenset(m2.all_positions())
+        self.assertNotEqual(pos1, pos2)
+
+    def test_tile_types_present(self):  # M-D09
+        tile_types = {c.tile_type for c in self.maze.all_cells() if c.tile_type}
+        self.assertTrue(len(tile_types) > 0, "Dungeon cells should have tile_type set")
+
+    def test_has_pits_or_potions(self):  # M-D10
+        has_pit = any(c.has_pit for c in self.maze.all_cells())
+        has_potion = any(
+            c.has_healing_potion or c.has_vision_potion
+            for c in self.maze.all_cells()
+        )
+        self.assertTrue(has_pit or has_potion, "Dungeon should have hazards/items")
+
+    def test_maze_id_contains_seed(self):  # M-D11
+        self.assertIn("42", self.maze.maze_id)
+
+
+# ===================================================================
+# 5) Constraint enforcement
 # ===================================================================
 
 class TestMazeConstraints(unittest.TestCase):
-    """M-C01 … M-C03"""
+    """M-C01 ... M-C03"""
 
     @classmethod
     def setUpClass(cls):

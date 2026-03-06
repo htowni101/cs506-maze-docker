@@ -3,6 +3,12 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Loose PNGs at root (assets belong in assets/)
+/*.png
+
+# Game databases
+*.db
+
 # C extensions
 *.so
 

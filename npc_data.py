@@ -809,19 +809,42 @@ MESSY_GOBLIN_KIND_REACTIONS: dict[tuple[str, int], str] = {
 
 @dataclass
 class NPCState:
-    """Tracks an NPC's emotional state and interaction history."""
-    npc_id: str                          # "old_weary" or "messy_goblin"
+    """Tracks an NPC's emotional state and interaction history.
+
+    Reversal rules
+    ~~~~~~~~~~~~~~
+    * **Positive-to-cruel reversal** (``last_side == "kind"`` and player
+      presses C while ``emotional_state`` is +1 or +2): NPC becomes
+      *puzzled* (``is_puzzled = True``).  No state change.  Next C press
+      drops the NPC straight to −1 (regardless of where they were).
+    * **Negative-to-kind "calming" stall** at 0: when the NPC is brought
+      *up* to 0 from a negative number (``was_negative == True``), the
+      game shows "[NPC] is starting to calm down."  The *next* K press at 0
+      makes the NPC puzzled (no state change).  A further K press moves
+      to +1 normally.
+    * Going from −1 → 0 via K is *not* stalled — the stall only happens
+      on the *second* K at 0 when ``was_negative`` is True.
+    """
+    npc_id: str                          # "old_weary", "messy_goblin", …
     emotional_state: int = 0             # -3 to +3
     resolved: bool = False               # True once hit -3 or +3
     resolution: str = ""                 # e.g. "cruel_success", "kind_fail"
     last_emotion_category: str = ""      # tracks the emotion flavour
     interaction_count: int = 0
 
+    # --- reversal-rule tracking ---
+    last_side: str = ""                  # "kind" | "cruel" | "" (not yet interacted)
+    is_puzzled: bool = False             # True while showing puzzled face
+    was_negative: bool = False           # True if NPC was ever < 0
+    calming_stall_used: bool = False     # True once the "calming down" message at 0 has been shown
+
     def apply_kindness(self) -> int:
         """Shift +1, clamp, return new state."""
         if not self.resolved:
             self.emotional_state = min(3, self.emotional_state + 1)
             self.interaction_count += 1
+            if self.emotional_state < 0:
+                self.was_negative = True
         return self.emotional_state
 
     def apply_cruelty(self) -> int:
@@ -829,6 +852,8 @@ class NPCState:
         if not self.resolved:
             self.emotional_state = max(-3, self.emotional_state - 1)
             self.interaction_count += 1
+            if self.emotional_state < 0:
+                self.was_negative = True
         return self.emotional_state
 
     def to_dict(self) -> dict:
@@ -839,6 +864,10 @@ class NPCState:
             "resolution": self.resolution,
             "last_emotion_category": self.last_emotion_category,
             "interaction_count": self.interaction_count,
+            "last_side": self.last_side,
+            "is_puzzled": self.is_puzzled,
+            "was_negative": self.was_negative,
+            "calming_stall_used": self.calming_stall_used,
         }
 
     @classmethod
