@@ -23,6 +23,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
+import view
+
 # --- Module imports (main.py is the ONLY place these happen) ---
 from maze import (
     Maze,
@@ -34,11 +36,8 @@ from maze import (
     build_square_maze,
 )
 from db import (
-    GameRepository,
-    JsonGameRepository,
-    open_repo,
-    PlayerRecord,
-    GameRecord,
+    GameRepository,    
+    open_repo,        
 )
 from npc_data import (
     NPCState,
@@ -672,18 +671,18 @@ def _print_output(output: GameOutput) -> bool:
         print()
         print(v.map_text)
     print()
-    print(_render_status_bar(v))
+    print(view.render_status_bar(v.__dict__))
 
     if v.npc_here and v.npc_name:
         emotion_bar = "=" * max(0, v.npc_emotion + 3) if v.npc_emotion is not None else ""
         emotion_val = v.npc_emotion if v.npc_emotion is not None else 0
         print(f"{v.npc_name} is here.  Mood: [{emotion_val:+d}] {'█' * max(0, emotion_val + 3)}{'░' * max(0, 3 - emotion_val)}")
 
-    print(_render_controls(v))
+    print(view.render_controls(v.__dict__))
     return False
 
 
-def run_cli(maze: Optional[Maze] = None, db_path: str = "game_data.json") -> None:
+def run_cli(maze: Optional[Maze] = None, db_path: str = "game_data.db") -> None:
     """
     Main CLI loop.  Wires maze + db + engine, then reads input / prints output.
     Redraws dungeon and controls after every input.
@@ -694,7 +693,7 @@ def run_cli(maze: Optional[Maze] = None, db_path: str = "game_data.json") -> Non
     repo = open_repo(db_path)
 
     # Player setup
-    print("=== Isometric Dungeon — Walking Skeleton ===")
+    print("=== Isometric Dungeon — MVP ===")
     handle = input("Enter your name: ").strip() or "Hero"
     player = repo.get_or_create_player(handle)
 
