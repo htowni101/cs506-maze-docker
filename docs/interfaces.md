@@ -1,35 +1,45 @@
-# Isometric Dungeon — Module Interfaces (Walking Skeleton)
+# Isometric Dungeon — Module Interfaces (MVP Refactor)
 
-This document defines the **stable contracts** between the 3 modules:
+This document defines the stable contracts between the 3 modules:
 
-- `maze.py` — domain / world model (pure Python)
-- `db.py` — persistence boundary (JSON-backed mock ORM for now)
-- `main.py` — game engine + UI wiring (CLI now, isometric PyGame later)
+- **maze.py** — domain / world model (pure Python)
+- **db.py** — persistence boundary (SQLModel + SQLite ORM)
+- **main.py** — game engine + UI wiring (CLI now, isometric PyGame later)
 
-The goal: each module can be **developed and tested independently**.
+The goal: each module can be developed and tested independently.
 
 ---
+## 0.5) Theme Vocabulary (MVP Requirement)
+
+The underlying mechanics remain a Quiz Maze, but domain language must reflect the team theme.
+
+Define and use these terms consistently across DB seed data and CLI text (MVP defaults):
+
+- Location/Room term: `Room`
+- Blocker/Door term: `Blocker`
+- Question/Challenge term: `Challenge`
+- Map term: `Map`
+- DB seed tag: `mvp_default`
 
 ## 1) Dependency Rules
 
-| Module   | May import          | May NOT import        |
-|----------|--------------------|-----------------------|
-| `maze.py`| stdlib only         | `db`, `main`          |
-| `db.py`  | stdlib only         | `maze`, `main`        |
-| `main.py`| `maze`, `db`        | *(nothing restricted)*|
+| Module    | May import                          | May NOT import |
+| --------- | ------------                        | -------------- |
+| maze.py   | stdlib only                         | db, main       |
+| db.py     | stdlib + sqlmodel (+ sqlalchemy)    | maze, main     |
+| main.py   | maze, db     | (nothing restricted) |
 
-- `maze.py` cannot call `print()`.  It outputs **data**, not text.
-- `db.py` stores **only JSON-serialisable primitives**.  
-  Any `maze.Position` objects must be converted to/from `{"row": int, "col": int}` **at the boundary** (inside `main.py`).
-- `main.py` is the **only** module that calls `print()` or `input()`.
+- **maze.py** cannot call `print()`. It outputs data, not text.
+- **db.py** persists records using SQLModel + SQLite. The *engine state dict* remains JSON-safe and is stored opaquely (db does not inspect it). Any `maze.Position` objects must still be converted to/from `{"row": int, "col": int}` at the boundary (inside main.py).
+- **main.py** is the only module that calls `print()` or `input()`.
 
 ---
 
 ## 2) Shared Serialisation Rules (DB Boundary)
 
-All persisted state must be JSON-safe:
+All *engine state crossing the DB boundary* must be JSON-safe:
 
-- `str | int | float | bool | None`
+- `str` | `int` | `float` | `bool` | `None`
 - `list[...]` of JSON-safe values
 - `dict[str, ...]` of JSON-safe values
 
@@ -43,28 +53,28 @@ pos_dict = {"row": pos.row, "col": pos.col}
 pos = Position(row=d["row"], col=d["col"])
 ```
 
-**Enums** (Direction, CellKind) are stored as their `.value` or `.name` string.
+**Enums** (`Direction`, `CellKind`) are stored as their `.value` or `.name` string.
 
-**Timestamps**: ISO-8601 UTC strings, e.g. `"2026-02-25T14:30:00Z"`.
+**Timestamps:** ISO-8601 UTC strings, e.g. `"2026-02-25T14:30:00Z"`.
 
 ---
 
-## 3) `maze.py` — Domain Contract
+## 3) maze.py — Domain Contract
 
 ### 3.1 Public Types
 
-#### `Direction` (Enum)
+#### Direction (Enum)
 
-| Value | Delta `(dr, dc)` |
-|-------|-------------------|
-| `N`   | `(-1, 0)`         |
-| `S`   | `(1, 0)`          |
-| `E`   | `(0, 1)`          |
-| `W`   | `(0, -1)`         |
+| Value | Delta (dr, dc) |
+| ----- | ----------------- |
+| N     | (-1, 0)           |
+| S     | (1, 0)            |
+| E     | (0, 1)            |
+| W     | (0, -1)           |
 
 Properties: `.dr`, `.dc`, `.opposite`.
 
-#### `Position` (frozen dataclass)
+#### Position (frozen dataclass)
 
 ```python
 @dataclass(frozen=True)
@@ -79,11 +89,11 @@ class Position:
     def from_dict(d: dict) -> Position
 ```
 
-#### `CellKind` (Enum)
+#### CellKind (Enum)
 
 Values: `START`, `EXIT`, `NORMAL`.
 
-#### `CellSpec` (dataclass)
+#### CellSpec (dataclass)
 
 ```python
 @dataclass
@@ -99,7 +109,7 @@ class CellSpec:
     def is_passable(direction: Direction) -> bool
 ```
 
-### 3.2 `Maze` Class — What `main.py` Relies On
+### 3.2 Maze Class — What main.py Relies On
 
 ```python
 class Maze:
@@ -123,9 +133,9 @@ class Maze:
 
 ### 3.3 Factories
 
-| Factory                              | Description                                           |
-|--------------------------------------|-------------------------------------------------------|
-| `build_3x3_maze() -> Maze`          | Deterministic hand-authored 3×3 layout with 2 pillars, 1 pit, 1 potion |
+| Factory | Description |
+| ------- | ----------- |
+| `build_3x3_maze() -> Maze` | Deterministic hand-authored 3×3 layout with 2 pillars, 1 pit, 1 potion |
 | `build_square_maze(size, seed) -> Maze` | Seeded procedural N×N maze (recursive backtracker), 4 pillars |
 
 #### 3×3 Walking Skeleton Layout
@@ -141,60 +151,97 @@ class Maze:
             ║ wall
 ```
 
-Walls:
-- `(0,1)↔(1,1)` — blocks the central shortcut
-- `(2,0)↔(2,1)` — forces the player to take a longer path
+**Walls:**
 
-Minimum path: `(0,0)→(1,0)→(1,1)→(2,1)→(2,2)` — but that skips `pillar_a`.
-Collecting both pillars requires visiting `(0,2)` and `(2,1)`.
+- (0,1)↔(1,1) — blocks the central shortcut
+- (2,0)↔(2,1) — forces the player to take a longer path
+
+**Minimum path:** (0,0)→(1,0)→(1,1)→(2,1)→(2,2) — but that skips pillar_a. Collecting both pillars requires visiting (0,2) and (2,1).
 
 ### 3.4 Fog of War
 
-Fog-of-war is handled by the **engine/CLI renderer** in `main.py`, not by `maze.py`.  
-The maze stays purely topological.  The renderer receives a `visited: set[Position]` and hides unvisited cells.
+Fog-of-war is tracked by `maze.py` as part of run state. `maze.py` must expose a structured snapshot of the *known map* (pure data) for the UI/engine to render. `maze.py` must not render ASCII and must not print.
 
+### 3.5 Maze Run State (MVP)
+
+`maze.py` owns the evolving run state for fog-of-war. The engine stores/loads it as JSON-safe primitives.
+
+```python
+@dataclass
+class MazeRunState:
+    pos: Position
+    visited: set[Position]            # all visited locations
+    visible: set[Position]            # currently visible locations (e.g., pos + neighbors)
+    cleared_blockers: set[str]        # ids of cleared blockers
+
+def start_run(maze: Maze) -> MazeRunState
+
+```
+
+### 3.6 Blockers & Movement Outcomes (MVP)
+
+A movement attempt can be blocked by a thematic blocker (formerly a "door").
+
+```python
+@dataclass(frozen=True)
+class BlockerSpec:
+    blocker_id: str
+    at: Position
+    direction: Direction
+    label: str              # themed name, e.g. "Firewall"
+
+```
+
+### 3.7 Known Map Snapshot (MVP)
+
+Maze provides a structured fog-of-war snapshot for rendering.
+
+```python
+def known_map(maze: Maze, state: MazeRunState) -> dict   
+
+```
 ---
 
-## 4) `db.py` — Persistence Contract (JSON I/O)
+## 4) db.py — Persistence Contract (SQLModel/SQLite)
 
 ### 4.1 Record DTOs
 
-#### `PlayerRecord`
+**PlayerRecord**
 
-| Field        | Type  |
-|-------------|-------|
-| `id`         | `str` (UUID) |
-| `handle`     | `str` |
-| `created_at` | `str` (ISO-8601) |
+| Field       | Type     |
+| ----------- | -------- |
+| id          | str (UUID) |
+| handle      | str      |
+| created_at  | str (ISO-8601) |
 
-#### `GameRecord`
+**GameRecord**
 
-| Field          | Type  |
-|---------------|-------|
-| `id`           | `str` (UUID) |
-| `player_id`    | `str` |
-| `maze_id`      | `str` |
-| `maze_version` | `str` |
-| `state`        | `dict[str, Any]` (opaque to db) |
-| `status`       | `str` — `"in_progress"` or `"completed"` |
-| `created_at`   | `str` (ISO-8601) |
-| `updated_at`   | `str` (ISO-8601) |
+| Field        | Type     |
+| ------------ | -------- |
+| id           | str (UUID) |
+| player_id    | str      |
+| maze_id      | str      |
+| maze_version | str      |
+| state        | dict[str, Any] (opaque to db) |
+| status       | str — "in_progress" or "completed" |
+| created_at   | str (ISO-8601) |
+| updated_at   | str (ISO-8601) |
 
-#### `ScoreRecord`
+**ScoreRecord**
 
-| Field          | Type  |
-|---------------|-------|
-| `id`           | `str` (UUID) |
-| `player_id`    | `str` |
-| `game_id`      | `str` |
-| `maze_id`      | `str` |
-| `maze_version` | `str` |
-| `metrics`      | `dict[str, Any]` |
-| `created_at`   | `str` (ISO-8601) |
+| Field        | Type     |
+| ------------ | -------- |
+| id           | str (UUID) |
+| player_id    | str      |
+| game_id      | str      |
+| maze_id      | str      |
+| maze_version | str      |
+| metrics      | dict[str, Any] |
+| created_at   | str (ISO-8601) |
 
 ### 4.2 Repository Interface (minimum)
 
-`main.py` depends on an object providing these methods:
+main.py depends on an object providing these methods:
 
 ```python
 class GameRepository:
@@ -212,18 +259,19 @@ class GameRepository:
     def top_scores(maze_id: str | None, limit: int) -> list[ScoreRecord]
 ```
 
-**Key rule**: `state` is **opaque** to the DB layer.  It stores whatever dict `main.py` hands it without inspecting or importing `maze` types.
+**Key rule:** `state` is opaque to the DB layer. It stores whatever dict main.py hands it without inspecting or importing maze types.
 
-### 4.3 JSON File Shape
+### 4.3 Engine State Storage (JSON-safe, Opaque to DB)
 
-```json
-{
-  "schema_version": 1,
-  "players": { "<player_id>": { "id": "...", "handle": "...", "created_at": "..." } },
-  "games":   { "<game_id>":   { "id": "...", "player_id": "...", "state": {...}, ... } },
-  "scores":  { "<score_id>":  { "id": "...", "metrics": {...}, ... } }
-}
-```
+Although the database backend uses SQLite via SQLModel, the *engine state* is stored as a JSON‑safe dictionary.
+
+- The `state` field in the Game record is opaque to `db.py`.
+- `db.py` must not inspect, interpret, or import any maze or engine types.
+- The engine (`main.py`) is responsible for converting complex domain objects
+  (e.g., `Position`) to and from JSON‑safe structures at the boundary.
+
+This design allows the persistence layer to remain independent of domain logic
+while still supporting flexible engine evolution.
 
 ### 4.4 How Position Crosses the DB Boundary
 
@@ -235,27 +283,32 @@ maze.Position ──────────────────────
                                          db.save_game(state)
                                                  │
                                                  ▼
-                                          JSON file on disk
+                                         SQLite row (JSON state payload)
 
               _dict_to_pos()                     │
 maze.Position ◄──────────────────────  db.get_game(id).state
 ```
 
-`main.py` owns the conversion functions:
+main.py owns the conversion functions:
+
 - `_pos_to_dict(pos: Position) -> dict`
 - `_dict_to_pos(d: dict) -> Position`
 
-`db.py` never touches `Position`.  It only sees `dict`.
+db.py never touches Position. It only sees dict data persisted in SQLite.
 
-### 4.5 Future: SQLite Backend
+### 4.5 SQLite Backend (MVP Default)
 
-`open_repo(path)` checks the file extension:
-- `.json` → `JsonGameRepository`
-- `.db` → `SqliteGameRepository` *(not yet implemented)*
+For the MVP phase, SQLite via SQLModel is the default and required persistence backend.
+
+- All game data (players, games, scores, questions) is stored in an SQLite database.
+- Repository initialization is responsible for creating tables if they do not exist.
+- No JSON-file-based repository is required for MVP.
+
+This ensures persistence across runs and supports question tracking without repeats.
 
 ---
 
-## 5) `main.py` — Engine + CLI Wiring
+## 5) main.py — Engine + CLI Wiring
 
 ### 5.1 Engine State (persisted via DB as JSON dict)
 
@@ -300,7 +353,8 @@ class GameEngine:
     def handle(cmd: Command) -> GameOutput
 ```
 
-#### `Command`
+**Command**
+
 ```python
 @dataclass
 class Command:
@@ -308,7 +362,8 @@ class Command:
     args: list[str]
 ```
 
-#### `GameView` (what the UI renders)
+**GameView** (what the UI renders)
+
 ```python
 @dataclass
 class GameView:
@@ -326,7 +381,8 @@ class GameView:
     map_text: str | None            # pre-rendered ASCII fog-of-war map
 ```
 
-#### `GameOutput`
+**GameOutput**
+
 ```python
 @dataclass
 class GameOutput:
@@ -334,17 +390,23 @@ class GameOutput:
     messages: list[str]
 ```
 
-### 5.3 CLI Command Grammar (Walking Skeleton)
+### 5.3 CLI Command Grammar (MVP)
 
-| Command            | Action                             |
-|-------------------|------------------------------------|
-| `n` / `s` / `e` / `w` | Move in that direction         |
-| `go <direction>`  | Alias for movement                  |
-| `look`            | Describe current cell & exits       |
-| `map`             | Show ASCII fog-of-war map           |
-| `heal` / `h`      | Use a healing potion               |
-| `save`            | Persist game state to JSON          |
-| `quit` / `q`      | Save and exit                      |
+| Command | Action |
+|--------|--------|
+| n / s / e / w | Attempt movement in that direction |
+| go <direction> | Alias for movement |
+| look | Describe the current location and visible exits |
+| map | Display the fog‑of‑war map |
+| heal / h | Use a healing item (if available) |
+| save | Persist the current game state via the repository |
+| quit / q | Save and exit the game |
+
+Note: If a movement attempt is blocked by a thematic blocker, the engine must:
+1. Request an unused themed question from the database
+2. Prompt the player for an answer
+3. Resolve the blocker based on correctness
+4. Continue the game loop accordingly
 
 ### 5.4 Map Rendering (fog of war)
 
@@ -355,22 +417,23 @@ class GameOutput:
 2 ###|###|###
 ```
 
-- `@` = player position
-- ` S ` = start (visited)
-- ` X ` = exit (visited)
-- ` P ` = pillar (visited)
-- ` O ` = pit (visited)
-- ` . ` = normal cell (visited)
-- `###` = unvisited / fog
+- **@** = player position
+- **S** = start (visited)
+- **X** = exit (visited)
+- **P** = pillar (visited)
+- **O** = pit (visited)
+- **.** = normal cell (visited)
+- **###** = unvisited / fog
 
 ---
 
 ## 6) Versioning & Compatibility
 
-| Key              | Stored in | Purpose                               |
-|-----------------|-----------|---------------------------------------|
-| `maze_id`        | DB        | Identifies which maze layout was used |
-| `maze_version`   | DB        | Tracks maze layout changes            |
-| `schema_version` | JSON file | DB schema version (currently `1`)     |
+| Key            | Stored in        | Purpose |
+|----------------|------------------|---------|
+| maze_id        | Database         | Identifies which maze layout was used |
+| maze_version   | Database         | Tracks changes to maze topology or rules |
+| schema_version | Database / code  | Tracks database schema changes |
 
-If `schema_version` changes → provide a migration path.  For the walking skeleton, keep it at `1`.
+The engine must verify version compatibility when loading persisted game state.  
+If any of these version identifiers change, a clear migration or compatibility strategy must be provided before gameplay continues.
