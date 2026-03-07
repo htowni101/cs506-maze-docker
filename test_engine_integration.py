@@ -180,13 +180,14 @@ class TestNPCInteraction(_EngineTestBase):
         ns = self.gs.npc_states["old_weary"]
         self.assertEqual(ns.emotional_state, -1)
 
-    def test_kind_then_cruel_cancels(self):  # E-N05
+    def test_kind_then_cruel_causes_puzzled_reversal(self):  # E-N05
         self._move_dir("e")
         self._move_dir("e")
         self.game._interact_npc("kind")
         self.game._interact_npc("cruel")
         ns = self.gs.npc_states["old_weary"]
-        self.assertEqual(ns.emotional_state, 0)
+        self.assertEqual(ns.emotional_state, 1)
+        self.assertTrue(ns.is_puzzled)
 
     def test_old_weary_cruel_to_minus_3_resolves(self):  # E-N06
         self._move_dir("e")

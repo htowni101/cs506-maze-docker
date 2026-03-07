@@ -33,7 +33,12 @@ class SpriteAnimator:
         fps : int
             Playback speed in frames-per-second (default 10).
         """
-        self.sheet = pygame.image.load(sprite_sheet_path).convert_alpha()
+        image = pygame.image.load(sprite_sheet_path)
+
+        if pygame.display.get_surface() is not None:
+            self.sheet = image.convert_alpha()
+        else:
+            self.sheet = image
         self.fps = fps
 
         # direction (upper) -> list[Surface]
