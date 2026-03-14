@@ -41,6 +41,9 @@ NPC_ART_PREFIX: dict[str, str] = {
     # npc_id  → filename prefix inside assets/
     "old_weary":    "gob",       # placeholder — swap to "weary" later
     "messy_goblin": "gob",
+    "lila":         "lila",
+    "giant":        "giant",
+    "knight":       "knight",
 }
 _DEFAULT_ART_PREFIX = "gob"
 

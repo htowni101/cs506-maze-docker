@@ -297,7 +297,7 @@ def build_square_maze(size: int, seed: int) -> Maze:
         if p != Position(0, 0) and p != Position(size - 1, size - 1)
     ]
     rng.shuffle(interior)
-    npc_ids = ["old_weary", "messy_goblin"]
+    npc_ids = ["old_weary", "messy_goblin", "lila", "giant", "knight"]
     for i, npc_id in enumerate(npc_ids):
         if i < len(interior):
             cells[interior[i]].npc_id = npc_id
@@ -404,15 +404,34 @@ def build_dungeon_maze(
 
     # Place NPCs in intermediate rooms
     rng = random.Random(seed)
-    npc_ids = ["old_weary", "messy_goblin"]
+    npc_ids = ["old_weary", "messy_goblin", "lila", "giant", "knight"]
     npc_rooms = rooms[1:-1] if len(rooms) > 2 else rooms[1:] if len(rooms) > 1 else []
     rng.shuffle(npc_rooms)
+    used_npc_positions: set[Position] = set()
     for i, npc_id in enumerate(npc_ids):
         if i >= len(npc_rooms):
             break
         npc_pos = Position(npc_rooms[i].center_y, npc_rooms[i].center_x)
         if npc_pos in cells:
             cells[npc_pos].npc_id = npc_id
+            used_npc_positions.add(npc_pos)
+
+    # If there are not enough room centers, place remaining NPCs on
+    # random floor cells so each static NPC still gets a unique location.
+    assigned = {c.npc_id for c in cells.values() if c.npc_id}
+    remaining_npcs = [nid for nid in npc_ids if nid not in assigned]
+    if remaining_npcs:
+        fallback_candidates = [
+            pos for pos, spec in cells.items()
+            if pos != start
+            and pos != exit_pos
+            and spec.npc_id is None
+            and not spec.has_pit
+            and pos not in used_npc_positions
+        ]
+        rng.shuffle(fallback_candidates)
+        for npc_id, pos in zip(remaining_npcs, fallback_candidates):
+            cells[pos].npc_id = npc_id
 
     # Place a pit and healing potion in other intermediate rooms
     item_rooms = [r for r in rooms if Position(r.center_y, r.center_x) != start
