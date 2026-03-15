@@ -1765,6 +1765,34 @@ class Game:
         pygame.quit()
         sys.exit()
 
+    def try_move(self, arrow: str) -> bool:
+        """Test-friendly one-step movement using 'up/down/left/right'."""
+        mapping = {
+            "up": Direction.N,
+            "down": Direction.S,
+            "left": Direction.W,
+            "right": Direction.E,
+        }
+
+        direction = mapping.get(str(arrow).lower())
+        if direction is None:
+            return False
+
+        next_pos = self.maze.next_pos(self.game_state.pos, direction)
+        if next_pos is None:
+            return False
+
+        self.game_state.pos = next_pos
+        self.game_state.move_count += 1
+        self.game_state._visit(next_pos)
+
+        # Keep render coordinates synced with tile position
+        self.player_row = next_pos.row + 0.5
+        self.player_col = next_pos.col + 0.5
+
+        # Trigger cell effects
+        self._on_enter_cell(next_pos)
+        return True
 
 if __name__ == '__main__':
     from maze import build_dungeon_maze
