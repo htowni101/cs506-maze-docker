@@ -1,10 +1,13 @@
 """
-game.py — Pygame Isometric Dungeon Game
+game.py — Pygame Isometric Dungeon Game (Presentation Layer)
 
 Integrates maze.py topology with isometric rendering, NPC emotion system,
 and fog of war.  Win condition: resolve both NPCs to unlock the exit.
+
+Domain state lives in game_state.py (GameState, NPC_REGISTRY).
 """
 import math
+import json
 import pygame
 import sys
 import os
@@ -26,13 +29,12 @@ from npc_data import (
     get_reaction,
     category_for_side,
     EMOTION_LABELS,
-    OLD_WEARY_GREETING, OLD_WEARY_DESCRIPTION,
-    OLD_WEARY_CRUEL_ACTIONS, OLD_WEARY_KIND_ACTIONS,
-    OLD_WEARY_CRUEL_REACTIONS, OLD_WEARY_KIND_REACTIONS,
-    MESSY_GOBLIN_GREETING, MESSY_GOBLIN_DESCRIPTION,
-    MESSY_GOBLIN_CRUEL_ACTIONS, MESSY_GOBLIN_KIND_ACTIONS,
-    MESSY_GOBLIN_CRUEL_REACTIONS, MESSY_GOBLIN_KIND_REACTIONS,
 )
+from game_state import GameState, NPC_REGISTRY
+from local_settings import load_local_settings
+
+
+LOCAL_SETTINGS = load_local_settings()
 
 
 def get_resource_path(relative_path):
@@ -42,172 +44,6 @@ def get_resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(os.path.dirname(__file__))
     return os.path.join(base_path, relative_path)
-
-
-# ---------------------------------------------------------------------------
-# NPC Registry — maps npc_id → data bundle
-# ---------------------------------------------------------------------------
-
-NPC_REGISTRY: dict[str, dict] = {
-    "old_weary": {
-        "name": "Old Weary",
-        "greeting": OLD_WEARY_GREETING,
-        "description": OLD_WEARY_DESCRIPTION,
-        "cruel_actions": OLD_WEARY_CRUEL_ACTIONS,
-        "kind_actions": OLD_WEARY_KIND_ACTIONS,
-        "cruel_reactions": OLD_WEARY_CRUEL_REACTIONS,
-        "kind_reactions": OLD_WEARY_KIND_REACTIONS,
-        "win_direction": "cruel",
-        "win_threshold": -3,
-        "fail_threshold": 3,
-    },
-    "messy_goblin": {
-        "name": "Messy Goblin",
-        "greeting": MESSY_GOBLIN_GREETING,
-        "description": MESSY_GOBLIN_DESCRIPTION,
-        "cruel_actions": MESSY_GOBLIN_CRUEL_ACTIONS,
-        "kind_actions": MESSY_GOBLIN_KIND_ACTIONS,
-        "cruel_reactions": MESSY_GOBLIN_CRUEL_REACTIONS,
-        "kind_reactions": MESSY_GOBLIN_KIND_REACTIONS,
-        "win_direction": "kind",
-        "win_threshold": 3,
-        "fail_threshold": -3,
-    },
-}
-
-
-class GameState:
-    """Manages fog of war, NPC tracking, and player state backed by a Maze."""
-
-    def __init__(self, maze: Maze, seed: int = 0):
-        self.maze = maze
-        self.seed = seed
-        self.rng = random.Random(seed)
-
-        # Build 2D arrays from Maze so the render pipeline stays unchanged
-        self.height = maze.height
-        self.width = maze.width
-        self.dungeon_map = [['#'] * maze.width for _ in range(maze.height)]
-        self.tile_types = [[None] * maze.width for _ in range(maze.height)]
-        for cell in maze.all_cells():
-            r, c = cell.pos.row, cell.pos.col
-            self.dungeon_map[r][c] = '.'
-            self.tile_types[r][c] = cell.tile_type or 'floor'
-
-        # Per-position fog of war  (True == fogged)
-        self.fog: dict[Position, bool] = {
-            pos: True for pos in maze.all_positions()
-        }
-
-        # Player state
-        self.pos: Position = maze.start
-        self.hp: int = 100
-        self.max_hp: int = 100
-        self.will: int = 10
-        self.max_will: int = 10
-        self.healing_potions: int = 0
-        self.vision_potions: int = 0
-        self.will_potions: int = 0
-        self.move_count: int = 0
-        self.sprite_direction: str = 'SW'
-        self.visited: set[Position] = set()
-        self.is_complete: bool = False
-        self.is_dead: bool = False
-
-        # NPC states
-        self.npc_states: dict[str, NPCState] = {}
-        self.npc_greeted: set[str] = set()
-        for cell in maze.all_cells():
-            if cell.npc_id and cell.npc_id in NPC_REGISTRY:
-                self.npc_states[cell.npc_id] = NPCState(npc_id=cell.npc_id)
-
-        # Consumed items
-        self.consumed_potions: set[Position] = set()
-        self.triggered_pits: set[Position] = set()
-
-        # Mobile NPCs
-        self.mobile_npcs: list[MobileNPC] = self._place_mobile_npcs(seed)
-
-        # Clear fog at start
-        self._visit(maze.start)
-
-    # -- fog helpers --
-
-    def _visit(self, pos: Position):
-        self.visited.add(pos)
-        self.clear_fog_radius(pos, radius=2)
-
-    def clear_fog_at(self, pos: Position):
-        if pos in self.fog:
-            self.fog[pos] = False
-
-    def clear_fog_radius(self, center: Position, radius: int = 2):
-        for pos, _fogged in self.fog.items():
-            if abs(pos.row - center.row) + abs(pos.col - center.col) <= radius:
-                self.fog[pos] = False
-
-    def clear_fog_nearest_cluster(self) -> bool:
-        """Reveal nearest cluster of fogged cells (vision potion)."""
-        fogged = [p for p, f in self.fog.items() if f]
-        if not fogged:
-            return False
-        nearest = min(
-            fogged,
-            key=lambda p: abs(p.row - self.pos.row) + abs(p.col - self.pos.col),
-        )
-        self.clear_fog_radius(nearest, radius=4)
-        return True
-
-    def is_fogged(self, pos: Position) -> bool:
-        return self.fog.get(pos, True)
-
-    def _place_mobile_npcs(self, seed: int) -> list[MobileNPC]:
-        """Pick spawn positions for mobile NPCs in rooms far from start/exit."""
-        rng = random.Random(seed + 99)
-        start = self.maze.start
-        exit_pos = self.maze.exit
-
-        # Build distance map from start to find tiles far from start
-        dist_from_start = bfs_distance_map(self.maze, start)
-
-        # Candidate tiles: floor cells with no static NPC, not start/exit
-        candidates = []
-        for cell in self.maze.all_cells():
-            p = cell.pos
-            if p == start or p == exit_pos:
-                continue
-            if cell.npc_id:  # has a static NPC
-                continue
-            if cell.has_pit:
-                continue
-            d = dist_from_start.get(p, 0)
-            if d >= 5:  # at least 5 tiles from start
-                candidates.append((p, d))
-
-        # Sort by distance descending, pick two well-separated positions
-        candidates.sort(key=lambda x: -x[1])
-        npcs: list[MobileNPC] = []
-
-        if candidates:
-            brian_pos = candidates[rng.randint(0, min(5, len(candidates) - 1))][0]
-            npcs.append(create_brian_wererat(brian_pos))
-
-            # For shoe, pick a position far from Brian too
-            shoe_candidates = [
-                (p, d) for p, d in candidates
-                if abs(p.row - brian_pos.row) + abs(p.col - brian_pos.col) >= 4
-            ]
-            if not shoe_candidates:
-                shoe_candidates = candidates
-            shoe_pos = shoe_candidates[rng.randint(0, min(5, len(shoe_candidates) - 1))][0]
-            npcs.append(create_floating_shoe(shoe_pos))
-
-        return npcs
-
-    def all_npcs_resolved(self) -> bool:
-        if not self.npc_states:
-            return True
-        return all(ns.resolved for ns in self.npc_states.values())
 
 
 class Game:
@@ -238,8 +74,17 @@ class Game:
     _ALL_DIR_KEYS = set(_VELOCITY_MAP.keys())
 
     # Smooth-movement tuning
-    PLAYER_SPEED = 3.5   # tiles per second
+    PLAYER_SPEED = LOCAL_SETTINGS.character_speed_tiles_per_second
+    TARGET_FPS = max(1, LOCAL_SETTINGS.target_fps)
+    BASE_ANIMATION_FPS = max(1, LOCAL_SETTINGS.animation_fps)
     TILE_MARGIN  = 0.05  # stop this far from a blocked edge
+    NEG_AXIS_COLLISION_BUFFER = 0.16  # extra stop buffer for NE/NW-side contacts
+    FOG_OVERLAP_PX = 2
+
+    # Collision probe offset in tile-space.
+    # Keep neutral by default so render anchor and collision sample match.
+    COLLISION_PROBE_ROW_OFFSET = 0.0
+    COLLISION_PROBE_COL_OFFSET = 0.0
 
     def __init__(
         self,
@@ -265,11 +110,14 @@ class Game:
         # Load assets
         self.assets = self._load_assets()
 
-        # Zoom
-        self.debug_scale = 1.0
-        self.tile_w = int(128 * self.debug_scale)
-        self.tile_h = int(75 * self.debug_scale)
+        # Zoom — map_scale sizes dungeon tiles/fog; debug_scale sizes the hero sprite
+        self.debug_scale = max(0.25, LOCAL_SETTINGS.debug_scale)
+        self.map_scale = 3.0
+        self.tile_w = int(128 * self.map_scale)
+        self.tile_h = int(75 * self.map_scale)
         self._scaled_assets_cache: dict = {}
+        self._fog_overlap_cache: dict[tuple[str, int, int], pygame.Surface] = {}
+        self._fog_exact_cache: dict[tuple[str, int, int], pygame.Surface] = {}
 
         # Input
         self.keys_held: set[str] = set()
@@ -277,7 +125,7 @@ class Game:
         # Messages / NPC dialogue
         self.message_text: Optional[str] = None
         self.message_time: int = 0
-        self.message_duration: int = 180  # frames (3 s @ 60 FPS)
+        self.message_duration: int = int(self.TARGET_FPS * 3)
         self.npc_dialogue: Optional[str] = None  # shown while on NPC cell
         self.npc_dialogue_time: int = 0
 
@@ -306,13 +154,60 @@ class Game:
         self.player_col: float = start.col + 0.5
 
         # Sprite animator
-        sheet_path = Path(get_resource_path('assets')) / 'sprte sheet isometric silhouette.png'
-        if not sheet_path.exists():
-            sheet_path = Path(__file__).parent / 'assets' / 'sprte sheet isometric silhouette.png'
-        self.animator = SpriteAnimator(str(sheet_path), fps=10)
+        assets_dir = Path(get_resource_path('assets'))
+        if not assets_dir.exists():
+            assets_dir = Path(__file__).parent / 'assets'
+
+        candidate_sheets = [
+            assets_dir / 'witch_sprite_sheet.png',
+            assets_dir / 'sprte sheet isometric silhouette.png',
+        ]
+        sheet_path = next((p for p in candidate_sheets if p.exists()), None)
+        if sheet_path is None:
+            raise FileNotFoundError(
+                "Missing sprite sheet. Expected one of: "
+                "assets/witch_sprite_sheet.png or "
+                "assets/sprte sheet isometric silhouette.png"
+            )
+        self.animator = SpriteAnimator(str(sheet_path), fps=self.BASE_ANIMATION_FPS)
 
         # Pre-build sorted tile list for rendering
         self._sorted_tiles = self._build_sorted_tile_list()
+
+        # ---- Debug mode ----
+        self.debug_mode: bool = False
+        self._dbg_player_row: float = 0.5
+        self._dbg_player_col: float = 0.5
+        self._dbg_collision: bool = False
+        self._dbg_zoom_pct: int = int(self.map_scale * 100)
+        self._dbg_anim_speed_pct: int = 100
+        self._dbg_move_speed_pct: int = 100
+        self._dbg_probe_tile: tuple[int, int] = (11, 2)
+        self._dbg_btn_rects: dict[str, pygame.Rect] = {}
+        self._dbg_last_probe: Optional[dict[str, object]] = None
+        self._dbg_font_sm = pygame.font.Font(None, 16)
+        self._dbg_font_md = pygame.font.Font(None, 26)
+        self._dbg_font_lg = pygame.font.Font(None, 30)
+        self._dbg_screen: int = 0  # 0 = general debug, 1 = fog placement
+        self._dbg_fog_grid_size: int = 10
+        self._dbg_fog_assignments: dict[tuple[int, int], list[int]] = {}
+        self._dbg_fog_hover_tile: Optional[tuple[int, int]] = None
+        self._dbg_fog_output_button: Optional[pygame.Rect] = None
+        self._dbg_fog_last_output_count: int = 0
+        self._dbg_fog_zoom_pct: int = 100
+
+        # Numpad layout: 7/8/9 on top row, 4/5/6 middle, 1/2/3 bottom.
+        self._dbg_fog_num_to_key: dict[int, str] = {
+            1: 'fog_sw.png',
+            2: 'fog_s.png',
+            3: 'fog_se.png',
+            4: 'fog_w.png',
+            5: 'fog_c.png',
+            6: 'fog_e.png',
+            7: 'fog_nw.png',
+            8: 'fog_n.png',
+            9: 'fog_ne.png',
+        }
 
     # ------------------------------------------------------------------
     # Asset loading
@@ -362,15 +257,56 @@ class Game:
         surf = self.assets.get(key)
         if surf is None:
             return None
-        if self.debug_scale == 1:
+        # Map assets (floors, walls, fog, doors, etc.) render at map_scale;
+        # everything else (potions, hero statics, NPCs) stays at 1:1.
+        key_lower = key.lower()
+        _MAP_KEYS = ('hall', 'door', 'corner', 'dead', 'wall',
+                     'pillar', 'pit', 'floor', 'fog')
+        scale = self.map_scale if any(k in key_lower for k in _MAP_KEYS) else 1.0
+        if scale == 1.0:
             return surf
         cached = self._scaled_assets_cache.get(key)
         if cached:
             return cached
-        w = max(1, int(surf.get_width() * self.debug_scale))
-        h = max(1, int(surf.get_height() * self.debug_scale))
+        w = max(1, int(surf.get_width() * scale))
+        h = max(1, int(surf.get_height() * scale))
         scaled = pygame.transform.smoothscale(surf, (w, h))
         self._scaled_assets_cache[key] = scaled
+        return scaled
+
+    def _get_fog_asset(self, key: str, overlap_px: Optional[int] = None):
+        src = self.assets.get(key)
+        if src is None:
+            return None
+        if overlap_px is None:
+            overlap_px = self.FOG_OVERLAP_PX
+        overlap = max(0, int(overlap_px))
+        base_w = max(1, int(round(src.get_width() * self.map_scale)))
+        base_h = max(1, int(round(src.get_height() * self.map_scale)))
+        target_w = base_w + overlap * 2
+        target_h = base_h + overlap * 2
+        cache_key = (f"{key}:{overlap}", target_w, target_h)
+        cached = self._fog_overlap_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        # Use nearest-neighbor scaling for fog to avoid semi-transparent seam artifacts.
+        expanded = pygame.transform.scale(src, (target_w, target_h))
+        self._fog_overlap_cache[cache_key] = expanded
+        return expanded
+
+    def _get_fog_asset_exact(self, key: str):
+        """Fog sprite scaled exactly like debugger tiles (no overlap expansion)."""
+        src = self.assets.get(key)
+        if src is None:
+            return None
+        target_w = max(1, int(round(src.get_width() * self.map_scale)))
+        target_h = max(1, int(round(src.get_height() * self.map_scale)))
+        cache_key = (key, target_w, target_h)
+        cached = self._fog_exact_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        scaled = pygame.transform.scale(src, (target_w, target_h))
+        self._fog_exact_cache[cache_key] = scaled
         return scaled
 
     # ------------------------------------------------------------------
@@ -382,10 +318,32 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if self.dead and self.try_again_button:
+                if self.debug_mode:
+                    if self._dbg_screen == 0:
+                        for label, rect in self._dbg_btn_rects.items():
+                            if rect.collidepoint(event.pos):
+                                self._dbg_handle_button(label)
+                                break
+                    else:
+                        if self._dbg_fog_output_button and self._dbg_fog_output_button.collidepoint(event.pos):
+                            self._dbg_emit_fog_output()
+                elif self.dead and self.try_again_button:
                     if self.try_again_button.collidepoint(event.pos):
                         self.restart_game()
             elif event.type == pygame.KEYDOWN:
+                if self.debug_mode:
+                    if event.key == pygame.K_TAB:
+                        self._dbg_screen = 1 - self._dbg_screen
+                        self.keys_held.clear()
+                        continue
+                    if self._dbg_screen == 1:
+                        num = self._dbg_numpad_digit(event.key)
+                        if num is not None:
+                            self._dbg_apply_fog_number(num)
+                            continue
+                        if event.key in {pygame.K_DELETE, pygame.K_BACKSPACE}:
+                            self._dbg_remove_hover_fog()
+                            continue
                 key_name = self._pygame_key_to_dir(event.key)
                 if key_name:
                     self.keys_held.add(key_name)
@@ -399,6 +357,12 @@ class Game:
                     self._interact_npc("kind")
                 elif event.key == pygame.K_c:
                     self._interact_npc("cruel")
+                elif event.key == pygame.K_d:
+                    self.debug_mode = not self.debug_mode
+                    self._dbg_screen = 0
+                    self._dbg_player_row = 0.5
+                    self._dbg_player_col = 0.5
+                    self.keys_held.clear()
                 elif event.key == pygame.K_ESCAPE:
                     self.running = False
             elif event.type == pygame.KEYUP:
@@ -422,6 +386,20 @@ class Game:
     @classmethod
     def _pygame_key_to_dir(cls, key: int) -> Optional[str]:
         return cls._KEY_TO_DIR.get(key)
+
+    def _to_collision_probe(self, row: float, col: float) -> tuple[float, float]:
+        """Convert render anchor coordinates to collision probe coordinates."""
+        return (
+            row + self.COLLISION_PROBE_ROW_OFFSET,
+            col + self.COLLISION_PROBE_COL_OFFSET,
+        )
+
+    def _from_collision_probe(self, row: float, col: float) -> tuple[float, float]:
+        """Convert collision probe coordinates back to render anchor coordinates."""
+        return (
+            row - self.COLLISION_PROBE_ROW_OFFSET,
+            col - self.COLLISION_PROBE_COL_OFFSET,
+        )
 
     # ------------------------------------------------------------------
     # Smooth movement & collision
@@ -455,7 +433,24 @@ class Game:
         new = cur + delta
         old_tile = math.floor(cur)
         new_tile = math.floor(new)
-        margin = self.TILE_MARGIN
+
+        # If pushing toward a blocked negative-side boundary, hold at the
+        # buffered stop line immediately to prevent shake/oscillation.
+        if delta < 0 and self.NEG_AXIS_COLLISION_BUFFER > 0.0:
+            if axis_is_row:
+                from_r, from_c = old_tile, math.floor(other_axis)
+                to_r, to_c = old_tile - 1, from_c
+            else:
+                from_r, from_c = math.floor(other_axis), old_tile
+                to_r, to_c = from_r, old_tile - 1
+
+            blocked_neg = not (
+                self._is_floor(to_r, to_c)
+                and self._can_pass(from_r, from_c, to_r, to_c)
+            )
+            stop_line = float(old_tile) + self.NEG_AXIS_COLLISION_BUFFER + 1e-9
+            if blocked_neg and cur <= stop_line:
+                return stop_line
 
         if old_tile == new_tile:
             return new  # still inside the same tile
@@ -471,11 +466,15 @@ class Game:
         if self._is_floor(to_r, to_c) and self._can_pass(from_r, from_c, to_r, to_c):
             return new  # passage allowed
 
-        # Blocked — clamp to old tile boundary
+        # Blocked — hold exactly at the tile boundary.
+        # Using 1e-9 offset keeps floor() on the safe side, prevents
+        # the margin > step oscillation that caused screen vibration,
+        # and makes NE/NW and SW/SE stop symmetrically at the wall.
         if delta > 0:
-            return float(old_tile) + 1.0 - margin
+            return float(new_tile) - 1e-9   # just inside current tile, upper edge
         else:
-            return float(old_tile) + margin
+            # Add a small inward buffer for negative-axis movement (NE/NW side).
+            return float(new_tile + 1) + self.NEG_AXIS_COLLISION_BUFFER + 1e-9
 
     def _update_movement(self, dt_s: float):
         """Per-frame smooth movement with wall collision."""
@@ -505,17 +504,21 @@ class Game:
         if facing:
             gs.sprite_direction = facing
             self.animator.set_direction(facing)
+            # Left/right on screen (pure E or W) → 2.3× base fps
+            # All other directions (N/S straight + all diagonals) → 3× base fps
+            self.animator.fps = int(self.BASE_ANIMATION_FPS * (2.3 if facing in ('W', 'E') else 3.0))
 
-        # Apply movement (axis-separated for wall sliding)
+        # Apply movement (axis-separated for wall sliding) in collision-probe space
         step = self.PLAYER_SPEED * dt_s
-        self.player_col = self._try_axis(
-            self.player_col, vc * step, self.player_row, axis_is_row=False)
-        self.player_row = self._try_axis(
-            self.player_row, vr * step, self.player_col, axis_is_row=True)
+        probe_row, probe_col = self._to_collision_probe(self.player_row, self.player_col)
+        probe_col = self._try_axis(
+            probe_col, vc * step, probe_row, axis_is_row=False)
+        probe_row = self._try_axis(
+            probe_row, vr * step, probe_col, axis_is_row=True)
+        self.player_row, self.player_col = self._from_collision_probe(probe_row, probe_col)
 
-        # Detect tile change → fire game events
-        new_tile = Position(math.floor(self.player_row),
-                            math.floor(self.player_col))
+        # Detect tile change from collision probe → fire game events
+        new_tile = Position(math.floor(probe_row), math.floor(probe_col))
         if new_tile != gs.pos:
             gs.pos = new_tile
             gs.move_count += 1
@@ -856,7 +859,7 @@ class Game:
             elif self.death_drip_time < self.death_drip_duration:
                 self.death_drip_time += 1
 
-        self.clock.tick(60)
+        self.clock.tick(self.TARGET_FPS)
 
     # ------------------------------------------------------------------
     # Render
@@ -867,6 +870,7 @@ class Game:
 
         TILE_W = self.tile_w
         TILE_H = self.tile_h
+        dungeon_y_offset = TILE_H  # visual-only shift: move dungeon down 1 tile
         gs = self.game_state
 
         # Camera centers on hero (uses smooth float position)
@@ -893,7 +897,7 @@ class Game:
         # Tile pass
         for col, row, tile_type in self._sorted_tiles:
             sx = (col - row) * (TILE_W // 2) + self.camera_x
-            sy = (col + row) * (TILE_H // 2) + self.camera_y
+            sy = (col + row) * (TILE_H // 2) + self.camera_y + dungeon_y_offset
 
             asset_key = tile_type_to_asset.get(tile_type, 'floor_tile_s.png')
             asset = self._get_asset(asset_key)
@@ -962,7 +966,7 @@ class Game:
             if gs.is_fogged(npc_pos):
                 continue  # hidden in fog
             nx = (npc.float_col - npc.float_row) * (TILE_W / 2) + self.camera_x
-            ny = (npc.float_col + npc.float_row) * (TILE_H / 2) + self.camera_y
+            ny = (npc.float_col + npc.float_row) * (TILE_H / 2) + self.camera_y + dungeon_y_offset
             # Bob animation for floating shoe
             bob_offset = 0
             if npc.shape == "circle":
@@ -995,51 +999,49 @@ class Game:
         for surf, dx, dy in doors_to_draw:
             self.screen.blit(surf, (dx, dy))
 
-        # Fog pass
+        # Fog pass (debugger-style): draw fog_c at fogged cells, then border overlays
+        # on neighboring non-fog cells around each fog_c source tile.
+        fog_layers_by_pos: dict[Position, list[str]] = {}
+
+        def _add_layer(pos: Position, fog_key: str):
+            layers = fog_layers_by_pos.setdefault(pos, [])
+            if fog_key not in layers:
+                layers.append(fog_key)
+
+        border_map = [
+            ((-1, 0), 'fog_ne.png'),
+            ((0, 1), 'fog_se.png'),
+            ((1, 0), 'fog_sw.png'),
+            ((0, -1), 'fog_nw.png'),
+            ((-1, -1), 'fog_n.png'),
+            ((-1, 1), 'fog_e.png'),
+            ((1, 1), 'fog_s.png'),
+            ((1, -1), 'fog_w.png'),
+        ]
+
+        for fog_pos, fogged in gs.fog.items():
+            if not fogged:
+                continue
+            _add_layer(fog_pos, 'fog_c.png')
+            for (dr, dc), fog_key in border_map:
+                npos = Position(fog_pos.row + dr, fog_pos.col + dc)
+                if npos not in gs.fog:
+                    continue
+                if gs.is_fogged(npos):
+                    continue
+                _add_layer(npos, fog_key)
+
         for col, row, _tt in self._sorted_tiles:
             pos = Position(row, col)
-            if not gs.is_fogged(pos):
+            fog_layers = fog_layers_by_pos.get(pos)
+            if not fog_layers:
                 continue
             sx = (col - row) * (TILE_W // 2) + self.camera_x
-            sy = (col + row) * (TILE_H // 2) + self.camera_y
-
-            # Neighbour fog checks
-            n_clear = not gs.is_fogged(Position(row - 1, col))
-            s_clear = not gs.is_fogged(Position(row + 1, col))
-            w_clear = not gs.is_fogged(Position(row, col - 1))
-            e_clear = not gs.is_fogged(Position(row, col + 1))
-
-            clear_count = sum([n_clear, e_clear, s_clear, w_clear])
-            if clear_count == 0:
-                fog_key = 'fog_c.png'
-            elif clear_count == 2:
-                if n_clear and e_clear:
-                    fog_key = 'fog_e.png'
-                elif e_clear and s_clear:
-                    fog_key = 'fog_s.png'
-                elif s_clear and w_clear:
-                    fog_key = 'fog_w.png'
-                elif w_clear and n_clear:
-                    fog_key = 'fog_n.png'
-                else:
-                    fog_key = 'fog_c.png'
-            elif clear_count == 1:
-                if n_clear:
-                    fog_key = 'fog_ne.png'
-                elif e_clear:
-                    fog_key = 'fog_se.png'
-                elif s_clear:
-                    fog_key = 'fog_sw.png'
-                elif w_clear:
-                    fog_key = 'fog_nw.png'
-                else:
-                    fog_key = 'fog_c.png'
-            else:
-                fog_key = 'fog_c.png'
-
-            fog = self._get_asset(fog_key)
-            if fog:
-                self.screen.blit(fog, (int(sx - fog.get_width() // 2), int(sy - fog.get_height())))
+            sy = (col + row) * (TILE_H // 2) + self.camera_y + dungeon_y_offset
+            for fog_key in fog_layers:
+                fog = self._get_fog_asset_exact(fog_key)
+                if fog:
+                    self.screen.blit(fog, (round(sx - fog.get_width() / 2), round(sy - fog.get_height())))
 
         # UI overlays — HUD panel (minimap, bars, portrait)
         self.ui_panel.draw(
@@ -1094,6 +1096,15 @@ class Game:
             f"V - Vision potion ({gs.vision_potions})",
             f"W - Will potion ({gs.will_potions})",
         ] + npc_lines
+
+        if LOCAL_SETTINGS.debug_overlay_enabled:
+            lines += [
+                f"Debug scale: {self.debug_scale:.2f}",
+                f"Target FPS: {self.TARGET_FPS}",
+                f"Anim FPS: {self.BASE_ANIMATION_FPS}",
+                f"Speed: {self.PLAYER_SPEED:.2f} tiles/s",
+                f"Dungeon size: {self.maze.width}x{self.maze.height}",
+            ]
 
         padding = 6
         line_height = font.get_height() + 2
@@ -1226,7 +1237,14 @@ class Game:
 
         new_seed = self.seed + 1
         self.seed = new_seed
-        self.maze = build_dungeon_maze(seed=new_seed)
+        self.maze = build_dungeon_maze(
+            seed=new_seed,
+            width=LOCAL_SETTINGS.dungeon_width,
+            height=LOCAL_SETTINGS.dungeon_height,
+            max_rooms=LOCAL_SETTINGS.dungeon_max_rooms,
+            min_room_size=LOCAL_SETTINGS.dungeon_min_room_size,
+            max_room_size=LOCAL_SETTINGS.dungeon_max_room_size,
+        )
         self.game_state = GameState(self.maze, new_seed)
         self._sorted_tiles = self._build_sorted_tile_list()
         self.animator.reset()
@@ -1236,14 +1254,514 @@ class Game:
         self.keys_held.clear()
 
     # ------------------------------------------------------------------
+    # Debug mode
+    # ------------------------------------------------------------------
+
+    def _dbg_spiral_positions(self) -> list[tuple[int, int]]:
+        """Return (row, col) 0-indexed spiral starting at (4,4) — user's r5c5."""
+        positions: list[tuple[int, int]] = []
+        r, c = 4, 4
+        positions.append((r, c))
+        step = 1
+        dr_seq = [0, 1, 0, -1]
+        dc_seq = [1, 0, -1, 0]
+        dir_idx = 0
+        while len(positions) < 100:
+            for _ in range(2):
+                dr, dc = dr_seq[dir_idx % 4], dc_seq[dir_idx % 4]
+                for _ in range(step):
+                    r += dr
+                    c += dc
+                    positions.append((r, c))
+                    if len(positions) >= 100:
+                        return positions
+                dir_idx += 1
+            step += 1
+        return positions
+
+    def _dbg_handle_button(self, label: str):
+        step = 10
+        if label == 'Collision':
+            self._dbg_collision = not self._dbg_collision
+        elif label == 'Zoom+':
+            self._dbg_zoom_pct = min(300, self._dbg_zoom_pct + step)
+        elif label == 'Zoom-':
+            self._dbg_zoom_pct = max(30, self._dbg_zoom_pct - step)
+        elif label == 'Run+':
+            self._dbg_anim_speed_pct = min(400, self._dbg_anim_speed_pct + step)
+        elif label == 'Run-':
+            self._dbg_anim_speed_pct = max(10, self._dbg_anim_speed_pct - step)
+        elif label == 'Move+':
+            self._dbg_move_speed_pct = min(400, self._dbg_move_speed_pct + step)
+        elif label == 'Move-':
+            self._dbg_move_speed_pct = max(10, self._dbg_move_speed_pct - step)
+        elif label in {'NE', 'NW', 'SE', 'SW', 'Center'}:
+            tile_row = math.floor(self._dbg_player_row)
+            tile_col = math.floor(self._dbg_player_col)
+            self._dbg_last_probe = {
+                'label': label,
+                'row': round(self._dbg_player_row, 4),
+                'col': round(self._dbg_player_col, 4),
+                'tile_row': tile_row + 1,
+                'tile_col': tile_col + 1,
+                'offset_row': round(self._dbg_player_row - (tile_row + 0.5), 4),
+                'offset_col': round(self._dbg_player_col - (tile_col + 0.5), 4),
+            }
+            print(
+                "DBG_PROBE"
+                f" label={self._dbg_last_probe['label']}"
+                f" row={self._dbg_last_probe['row']}"
+                f" col={self._dbg_last_probe['col']}"
+                f" tile_r={self._dbg_last_probe['tile_row']}"
+                f" tile_c={self._dbg_last_probe['tile_col']}"
+                f" offset_row={self._dbg_last_probe['offset_row']}"
+                f" offset_col={self._dbg_last_probe['offset_col']}",
+                flush=True,
+            )
+
+    def _dbg_update(self, dt_s: float):
+        """Movement and animation update for debug mode."""
+        vr, vc = 0.0, 0.0
+        for key in self.keys_held:
+            v = self._VELOCITY_MAP.get(key)
+            if v:
+                vr += v[0]
+                vc += v[1]
+
+        is_moving = (vr != 0.0 or vc != 0.0)
+        self.animator.is_moving = is_moving
+
+        if is_moving:
+            mag = math.hypot(vr, vc)
+            vr /= mag
+            vc /= mag
+            sr = -1 if vr < 0 else (1 if vr > 0 else 0)
+            sc = -1 if vc < 0 else (1 if vc > 0 else 0)
+            facing = self._SIGN_TO_FACING.get((sr, sc))
+            if facing:
+                self.animator.set_direction(facing)
+
+            speed = self.PLAYER_SPEED * (self._dbg_move_speed_pct / 100.0)
+            new_col = self._dbg_player_col + vc * speed * dt_s
+            new_row = self._dbg_player_row + vr * speed * dt_s
+            max_dbg_row = max(10.5, self._dbg_probe_tile[0] + 0.5)
+            max_dbg_col = max(10.5, self._dbg_probe_tile[1] + 0.5)
+            if self._dbg_collision:
+                new_col = max(self.TILE_MARGIN, min(max_dbg_col - self.TILE_MARGIN, new_col))
+                new_row = max(self.TILE_MARGIN, min(max_dbg_row - self.TILE_MARGIN, new_row))
+            else:
+                new_col = max(-0.5, min(max_dbg_col, new_col))
+                new_row = max(-0.5, min(max_dbg_row, new_row))
+            self._dbg_player_col = new_col
+            self._dbg_player_row = new_row
+
+        target_fps = max(1, int(self.BASE_ANIMATION_FPS * self._dbg_anim_speed_pct / 100))
+        self.animator.fps = target_fps
+        self.animator.update(dt_s * 1000.0)
+
+    def _dbg_pick_fog_tile(self, mouse_pos: tuple[int, int], to_screen, tile_w: int, tile_h: int) -> Optional[tuple[int, int]]:
+        best_tile = None
+        best_score = float('inf')
+        mx, my = mouse_pos
+        for row in range(self._dbg_fog_grid_size):
+            for col in range(self._dbg_fog_grid_size):
+                cx, cy = to_screen(row, col)
+                nx = abs(mx - cx) / max(1.0, tile_w / 2)
+                ny = abs(my - cy) / max(1.0, tile_h / 2)
+                score = nx + ny
+                if score <= 1.0 and score < best_score:
+                    best_score = score
+                    best_tile = (row, col)
+        return best_tile
+
+    def _dbg_apply_fog_number(self, number: int):
+        if self._dbg_fog_hover_tile is None:
+            return
+        if number not in self._dbg_fog_num_to_key:
+            return
+        stack = self._dbg_fog_assignments.setdefault(self._dbg_fog_hover_tile, [])
+        stack.append(number)
+
+    @staticmethod
+    def _dbg_numpad_digit(key: int) -> Optional[int]:
+        mapping = {
+            pygame.K_KP1: 1, pygame.K_KP2: 2, pygame.K_KP3: 3,
+            pygame.K_KP4: 4, pygame.K_KP5: 5, pygame.K_KP6: 6,
+            pygame.K_KP7: 7, pygame.K_KP8: 8, pygame.K_KP9: 9,
+        }
+        return mapping.get(key)
+
+    def _dbg_remove_hover_fog(self):
+        if self._dbg_fog_hover_tile is None:
+            return
+        stack = self._dbg_fog_assignments.get(self._dbg_fog_hover_tile)
+        if not stack:
+            return
+        stack.pop()
+        if not stack:
+            self._dbg_fog_assignments.pop(self._dbg_fog_hover_tile, None)
+
+    def _dbg_emit_fog_output(self):
+        entries = []
+        for (row, col), numbers in sorted(self._dbg_fog_assignments.items(), key=lambda x: (x[0][0], x[0][1])):
+            for layer_index, number in enumerate(numbers):
+                fog_key = self._dbg_fog_num_to_key[number]
+                entries.append({
+                    'row0': row,
+                    'col0': col,
+                    'row1': row + 1,
+                    'col1': col + 1,
+                    'layer': layer_index,
+                    'tile_number': number,
+                    'fog_key': fog_key,
+                })
+
+        payload = {
+            'grid_size': self._dbg_fog_grid_size,
+            'mapping': {str(k): v for k, v in self._dbg_fog_num_to_key.items()},
+            'placements': entries,
+        }
+
+        print('FOG_DEBUG_OUTPUT_BEGIN', flush=True)
+        print(json.dumps(payload, indent=2), flush=True)
+        print('FOG_DEBUG_OUTPUT_END', flush=True)
+        self._dbg_fog_last_output_count = len(entries)
+
+    def _debug_render_fog(self):
+        self.screen.fill((14, 18, 28))
+
+        zoom = self._dbg_fog_zoom_pct / 100.0
+        tw = max(16, int(128 * zoom))
+        th = max(10, int(75 * zoom))
+        grid = self._dbg_fog_grid_size
+
+        center_row = (grid - 1) / 2
+        center_col = (grid - 1) / 2
+        center_iso_x = (center_col - center_row) * (tw / 2)
+        center_iso_y = (center_col + center_row) * (th / 2)
+        cam_x = self.screen_width * 0.36 - center_iso_x
+        cam_y = self.screen_height * 0.50 - center_iso_y
+
+        def to_screen(row: float, col: float) -> tuple[float, float]:
+            return (col - row) * (tw / 2) + cam_x, (col + row) * (th / 2) + cam_y
+
+        self._dbg_fog_hover_tile = self._dbg_pick_fog_tile(pygame.mouse.get_pos(), to_screen, tw, th)
+
+        floor = self.assets.get('floor_tile_s.png')
+        floor_scaled_cache: Optional[pygame.Surface] = None
+        fog_cache: dict[int, Optional[pygame.Surface]] = {}
+
+        for row in range(grid):
+            for col in range(grid):
+                sx, sy = to_screen(row, col)
+
+                if floor is not None:
+                    if floor_scaled_cache is None:
+                        tile_base: pygame.Surface = floor
+                        if zoom != 1.0:
+                            floor_scaled_cache = pygame.transform.scale(
+                                tile_base,
+                                (max(1, int(tile_base.get_width() * zoom)),
+                                 max(1, int(tile_base.get_height() * zoom))),
+                            )
+                        else:
+                            floor_scaled_cache = tile_base
+                    tile_surf = floor_scaled_cache
+                    self.screen.blit(tile_surf, (int(sx - tile_surf.get_width() // 2), int(sy - tile_surf.get_height())))
+
+                assigned_stack = self._dbg_fog_assignments.get((row, col), [])
+                for assigned in assigned_stack:
+                    if assigned not in fog_cache:
+                        src_fog = self.assets.get(self._dbg_fog_num_to_key[assigned])
+                        if src_fog is None:
+                            fog_cache[assigned] = None
+                        else:
+                            target_w = max(1, int(src_fog.get_width() * zoom))
+                            target_h = max(1, int(src_fog.get_height() * zoom))
+                            fog_cache[assigned] = pygame.transform.scale(src_fog, (target_w, target_h))
+                    fog = fog_cache[assigned]
+                    if fog is not None:
+                        self.screen.blit(fog, (round(sx - fog.get_width() / 2), round(sy - fog.get_height())))
+
+                if self._dbg_fog_hover_tile == (row, col):
+                    top = to_screen(row - 0.5, col)
+                    right = to_screen(row, col + 0.5)
+                    bottom = to_screen(row + 0.5, col)
+                    left = to_screen(row, col - 0.5)
+                    points = [(int(p[0]), int(p[1])) for p in (top, right, bottom, left)]
+                    pygame.draw.polygon(self.screen, (255, 225, 100), points, 2)
+
+        panel_x = self.screen_width - 320
+        panel_y = 16
+        panel_w = 300
+        panel_h = self.screen_height - 32
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 170))
+        self.screen.blit(panel, (panel_x, panel_y))
+
+        title = self._dbg_font_lg.render('DEBUG FOG SCREEN', True, (255, 215, 0))
+        self.screen.blit(title, (panel_x + 12, panel_y + 10))
+
+        help_lines = [
+            'TAB: switch debug screens',
+            'D: exit debug mode',
+            'Hover a tile, use NUMPAD 1-9',
+            'Each press adds another layer',
+            'Delete/Backspace removes top layer',
+        ]
+        text_y = panel_y + 48
+        for line in help_lines:
+            txt = self._dbg_font_sm.render(line, True, (220, 220, 220))
+            self.screen.blit(txt, (panel_x + 12, text_y))
+            text_y += 18
+
+        text_y += 6
+        legend_numbers = [7, 8, 9, 4, 5, 6, 1, 2, 3]
+        for idx, number in enumerate(legend_numbers):
+            fog_key = self._dbg_fog_num_to_key[number]
+            row_top = text_y + idx * 28
+            badge_rect = pygame.Rect(panel_x + 12, row_top, 24, 22)
+            pygame.draw.rect(self.screen, (45, 55, 80), badge_rect, border_radius=4)
+            pygame.draw.rect(self.screen, (130, 150, 200), badge_rect, 1, border_radius=4)
+            num_txt = self._dbg_font_sm.render(str(number), True, (255, 255, 255))
+            self.screen.blit(num_txt, num_txt.get_rect(center=badge_rect.center))
+
+            fog_thumb = self.assets.get(fog_key)
+            if fog_thumb is not None:
+                thumb_h = 20
+                thumb_w = max(1, int(fog_thumb.get_width() * (thumb_h / max(1, fog_thumb.get_height()))))
+                thumb = pygame.transform.scale(fog_thumb, (thumb_w, thumb_h))
+                self.screen.blit(thumb, (panel_x + 44, row_top + 1))
+
+            label = self._dbg_font_sm.render(fog_key.replace('.png', ''), True, (210, 210, 210))
+            self.screen.blit(label, (panel_x + 70, row_top + 4))
+
+        output_rect = pygame.Rect(panel_x + 12, panel_y + panel_h - 84, panel_w - 24, 34)
+        pygame.draw.rect(self.screen, (35, 90, 35), output_rect, border_radius=6)
+        pygame.draw.rect(self.screen, (170, 230, 170), output_rect, 2, border_radius=6)
+        output_text = self._dbg_font_md.render('OUTPUT', True, (255, 255, 255))
+        self.screen.blit(output_text, output_text.get_rect(center=output_rect.center))
+        self._dbg_fog_output_button = output_rect
+
+        placed_tile_count = len(self._dbg_fog_assignments)
+        placed_layer_count = sum(len(v) for v in self._dbg_fog_assignments.values())
+        placed = self._dbg_font_sm.render(
+            f'Tiles used: {placed_tile_count}  Layers: {placed_layer_count}', True, (220, 220, 220)
+        )
+        self.screen.blit(placed, (panel_x + 12, panel_y + panel_h - 44))
+
+        if self._dbg_fog_hover_tile is not None:
+            r, c = self._dbg_fog_hover_tile
+            hover_txt = self._dbg_font_sm.render(f'Hover: r{r + 1} c{c + 1}', True, (255, 235, 160))
+            self.screen.blit(hover_txt, (panel_x + 12, panel_y + panel_h - 24))
+
+        if self._dbg_fog_last_output_count > 0:
+            out_txt = self._dbg_font_sm.render(
+                f'Last output placements: {self._dbg_fog_last_output_count}', True, (190, 255, 190)
+            )
+            self.screen.blit(out_txt, (18, 16))
+
+        pygame.display.flip()
+
+    def _debug_render(self):
+        """Render the isometric 10x10 debug grid with all game assets and controls."""
+        self.screen.fill((20, 20, 40))
+
+        zoom = self._dbg_zoom_pct / 100.0
+        TW = max(16, int(128 * zoom))
+        TH = max(10, int(75 * zoom))
+
+        hero_row = self._dbg_player_row
+        hero_col = self._dbg_player_col
+        hero_iso_x = (hero_col - hero_row) * (TW / 2)
+        hero_iso_y = (hero_col + hero_row) * (TH / 2)
+        cam_x = self.screen_width / 2 - hero_iso_x
+        cam_y = self.screen_height / 2 - hero_iso_y
+
+        def to_screen(r: float, c: float) -> tuple[float, float]:
+            return (c - r) * (TW / 2) + cam_x, (c + r) * (TH / 2) + cam_y
+
+        # Grid outlines — 10×10 isometric diamonds
+        for row in range(10):
+            for col in range(10):
+                top    = to_screen(row - 0.5, col)
+                right  = to_screen(row,       col + 0.5)
+                bottom = to_screen(row + 0.5, col)
+                left   = to_screen(row,       col - 0.5)
+                pts = [(int(p[0]), int(p[1])) for p in (top, right, bottom, left)]
+                pygame.draw.polygon(self.screen, (60, 60, 80), pts, 1)
+
+        # Isolated probe tile, outside the 10x10 grid and non-adjacent to it.
+        dbg_r, dbg_c = self._dbg_probe_tile
+        dbg_sx, dbg_sy = to_screen(dbg_r, dbg_c)
+        dbg_tile = self.assets.get('floor_tile_s.png')
+        if dbg_tile is not None:
+            if zoom != 1.0:
+                dbg_tile = pygame.transform.scale(
+                    dbg_tile,
+                    (max(1, int(dbg_tile.get_width() * zoom)),
+                     max(1, int(dbg_tile.get_height() * zoom))),
+                )
+            self.screen.blit(
+                dbg_tile,
+                (int(dbg_sx - dbg_tile.get_width() // 2), int(dbg_sy - dbg_tile.get_height())),
+            )
+        dbg_label = self._dbg_font_md.render('debug tile', True, (255, 230, 140))
+        self.screen.blit(dbg_label, (int(dbg_sx - dbg_label.get_width() // 2), int(dbg_sy + 10)))
+
+        # Build sorted draw list (painter's algorithm: col+row, col, priority)
+        # priority 0 = floor tile strip/column, 1 = spiral assets
+        draw_items: list[tuple] = []
+        for r, c in [(0, 0), (0, 1), (0, 2), (7, 9), (8, 9), (9, 9)]:
+            draw_items.append((c + r, c, 0, 'floor', r, c, None))
+
+        sorted_keys = sorted(self.assets.keys())
+        spiral = self._dbg_spiral_positions()
+        for i, key in enumerate(sorted_keys):
+            if i >= len(spiral):
+                break
+            r, c = spiral[i]
+            if 0 <= r < 10 and 0 <= c < 10:
+                draw_items.append((c + r, c, 1, 'asset', r, c, key))
+
+        draw_items.sort(key=lambda x: (x[0], x[1], x[2]))
+
+        lbl_font = self._dbg_font_sm
+        for _, _, _, kind, row, col, data in draw_items:
+            sx, sy = to_screen(row, col)
+            surf = self.assets.get('floor_tile_s.png' if kind == 'floor' else data)
+            if surf is None:
+                continue
+            if zoom != 1.0:
+                w = max(1, int(surf.get_width() * zoom))
+                h = max(1, int(surf.get_height() * zoom))
+                surf = pygame.transform.scale(surf, (w, h))
+            aw, ah = surf.get_width(), surf.get_height()
+            self.screen.blit(surf, (int(sx - aw // 2), int(sy - ah)))
+            if kind == 'asset' and data and TW >= 48:
+                name = data.replace('_s.png', '').replace('.png', '')
+                lbl = lbl_font.render(name, True, (200, 200, 200))
+                self.screen.blit(lbl, (int(sx - lbl.get_width() // 2),
+                                       int(sy - ah // 2 - 6)))
+
+        # Hero sprite (always at natural 1× scale)
+        hsx, hsy = to_screen(hero_row, hero_col)
+        frame = self.animator.get_scaled_frame(1.0)
+        fw, fh = frame.get_width(), frame.get_height()
+        self.screen.blit(frame, (int(hsx - fw // 2), int(hsy - fh)))
+
+        # Right-side control panel
+        self._dbg_btn_rects = {}
+        px = self.screen_width - 210
+        py = 15
+        bw, bh = 190, 34
+        half = (bw - 8) // 2
+        font = self._dbg_font_md
+        lg = self._dbg_font_lg
+
+        title = lg.render("DEBUG  [D] to exit", True, (255, 200, 0))
+        self.screen.blit(title, (px, py))
+        py += 38
+
+        # Collision toggle (full width)
+        cr = pygame.Rect(px, py, bw, bh)
+        pygame.draw.rect(self.screen,
+                         (80, 60, 20) if self._dbg_collision else (40, 40, 60),
+                         cr, border_radius=5)
+        pygame.draw.rect(self.screen,
+                         (255, 220, 0) if self._dbg_collision else (120, 120, 180),
+                         cr, 2, border_radius=5)
+        cl = "Collision: ON" if self._dbg_collision else "Collision: OFF"
+        ct = font.render(cl, True, (255, 255, 255))
+        self.screen.blit(ct, ct.get_rect(center=cr.center))
+        self._dbg_btn_rects['Collision'] = cr
+        py += bh + 8
+
+        # Zoom / Run / Move paired buttons
+        for row_labels, val_txt in [
+            (('Zoom+', 'Zoom-'), f"Zoom  {self._dbg_zoom_pct}%"),
+            (('Run+',  'Run-'),  f"Anim  {self._dbg_anim_speed_pct}%"),
+            (('Move+', 'Move-'), f"Move  {self._dbg_move_speed_pct}%"),
+        ]:
+            for lbl, bx in [(row_labels[0], px), (row_labels[1], px + half + 8)]:
+                br = pygame.Rect(bx, py, half, bh)
+                pygame.draw.rect(self.screen, (40, 40, 60), br, border_radius=5)
+                pygame.draw.rect(self.screen, (120, 120, 180), br, 2, border_radius=5)
+                lt = font.render(lbl, True, (255, 255, 255))
+                self.screen.blit(lt, lt.get_rect(center=br.center))
+                self._dbg_btn_rects[lbl] = br
+            py += bh + 4
+            vt = font.render(val_txt, True, (180, 180, 255))
+            self.screen.blit(vt, (px, py))
+            py += 26
+
+        py += 6
+        probe_title = font.render('Probe capture', True, (255, 230, 140))
+        self.screen.blit(probe_title, (px, py))
+        py += 28
+
+        for row_labels in [('NW', 'NE'), ('SW', 'SE')]:
+            for lbl, bx in [(row_labels[0], px), (row_labels[1], px + half + 8)]:
+                br = pygame.Rect(bx, py, half, bh)
+                pygame.draw.rect(self.screen, (55, 45, 30), br, border_radius=5)
+                pygame.draw.rect(self.screen, (200, 170, 90), br, 2, border_radius=5)
+                lt = font.render(lbl, True, (255, 255, 255))
+                self.screen.blit(lt, lt.get_rect(center=br.center))
+                self._dbg_btn_rects[lbl] = br
+            py += bh + 6
+
+        center_rect = pygame.Rect(px, py, bw, bh)
+        pygame.draw.rect(self.screen, (55, 45, 30), center_rect, border_radius=5)
+        pygame.draw.rect(self.screen, (200, 170, 90), center_rect, 2, border_radius=5)
+        center_text = font.render('Center', True, (255, 255, 255))
+        self.screen.blit(center_text, center_text.get_rect(center=center_rect.center))
+        self._dbg_btn_rects['Center'] = center_rect
+        py += bh + 10
+
+        if self._dbg_last_probe is None:
+            info_lines = ['Last probe: none']
+        else:
+            probe = self._dbg_last_probe
+            info_lines = [
+                f"Last: {probe['label']}",
+                f"Pos row={probe['row']} col={probe['col']}",
+                f"Tile r{probe['tile_row']} c{probe['tile_col']}",
+                f"Offset row={probe['offset_row']} col={probe['offset_col']}",
+            ]
+        for line in info_lines:
+            txt = self._dbg_font_sm.render(line, True, (220, 220, 220))
+            self.screen.blit(txt, (px, py))
+            py += 18
+
+        # Player position (1-indexed display)
+        py += 8
+        tile_r = math.floor(self._dbg_player_row) + 1
+        tile_c = math.floor(self._dbg_player_col) + 1
+        pt = font.render(f"Pos: r{tile_r} c{tile_c}", True, (200, 200, 255))
+        self.screen.blit(pt, (px, py))
+
+        pygame.display.flip()
+
+    # ------------------------------------------------------------------
     # Main loop
     # ------------------------------------------------------------------
 
     def run(self):
         while self.running:
             self.handle_input()
-            self.update()
-            self.render()
+            if self.debug_mode:
+                dt_s = self.clock.get_time() / 1000.0
+                if self._dbg_screen == 0:
+                    self._dbg_update(dt_s)
+                    self._debug_render()
+                else:
+                    self.animator.is_moving = False
+                    self.animator.update(dt_s * 1000.0)
+                    self._debug_render_fog()
+                self.clock.tick(self.TARGET_FPS)
+            else:
+                self.update()
+                self.render()
         pygame.quit()
         sys.exit()
 
@@ -1252,7 +1770,14 @@ if __name__ == '__main__':
     from maze import build_dungeon_maze
     seed = random.randint(0, 999999)
     print(f"Generating dungeon (seed={seed})...")
-    maze = build_dungeon_maze(seed=seed)
+    maze = build_dungeon_maze(
+        seed=seed,
+        width=LOCAL_SETTINGS.dungeon_width,
+        height=LOCAL_SETTINGS.dungeon_height,
+        max_rooms=LOCAL_SETTINGS.dungeon_max_rooms,
+        min_room_size=LOCAL_SETTINGS.dungeon_min_room_size,
+        max_room_size=LOCAL_SETTINGS.dungeon_max_room_size,
+    )
     print(f"Maze: {maze.maze_id}, {len(maze.all_cells())} floor cells")
     game = Game(maze=maze, seed=seed)
     game.run()

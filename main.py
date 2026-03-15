@@ -17,10 +17,13 @@ from pathlib import Path
 from maze import build_dungeon_maze
 from db import open_repo
 from game import Game
+from local_settings import load_local_settings
 
 
 def main():
     """Launch the White Witch's Labyrinth."""
+    settings = load_local_settings()
+
     # Seed
     seed = random.randint(0, 999_999)
 
@@ -40,7 +43,14 @@ def main():
 
     # Generate maze
     print(f"Generating dungeon (seed={seed})...")
-    maze = build_dungeon_maze(seed=seed)
+    maze = build_dungeon_maze(
+        seed=seed,
+        width=settings.dungeon_width,
+        height=settings.dungeon_height,
+        max_rooms=settings.dungeon_max_rooms,
+        min_room_size=settings.dungeon_min_room_size,
+        max_room_size=settings.dungeon_max_room_size,
+    )
     print(f"Maze: {maze.maze_id}, {len(maze.all_cells())} floor cells")
 
     # Create game record
