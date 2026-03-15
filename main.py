@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import random
 import sys
+import pygame
+
 from pathlib import Path
 
 from maze import build_dungeon_maze
@@ -52,6 +54,12 @@ def main():
         max_room_size=settings.dungeon_max_room_size,
     )
     print(f"Maze: {maze.maze_id}, {len(maze.all_cells())} floor cells")
+    # Music plays when the game starts
+    pygame.init()
+    pygame.mixer.init()
+    pygame.mixer.music.load("assets/music/eerie_music.wav")
+    pygame.mixer.music.set_volume(0.3)
+    pygame.mixer.music.play(-1, fade_ms=5000)
 
     # Create game record
     game_rec = repo.create_game(
