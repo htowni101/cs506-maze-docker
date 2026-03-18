@@ -87,14 +87,16 @@ class Game:
     COLLISION_PROBE_COL_OFFSET = 0.0
 
     def __init__(
-        self,
-        maze: Maze,
-        seed: int = 0,
-        screen_width: int = 1200,
-        screen_height: int = 800,
-        repo=None,
-        player_name: str = "Hero",
-    ):
+    self,
+    maze: Maze,
+    seed: int = 0,
+    screen_width: int = 1200,
+    screen_height: int = 800,
+    repo=None,
+    player_name: str = "Hero",
+    game_id: str | None = None,
+    loaded_state: dict | None = None,
+):
         pygame.init()
         self.screen = pygame.display.set_mode((screen_width, screen_height))
         pygame.display.set_caption("The White Witch's Labyrinth")
@@ -106,6 +108,9 @@ class Game:
         self.seed = seed
         self.repo = repo
         self.player_name = player_name
+        self.game_id = game_id
+        self.loaded_state = loaded_state
+
 
         # Load assets
         self.assets = self._load_assets()
@@ -140,6 +145,10 @@ class Game:
 
         # Game state
         self.game_state = GameState(maze, seed)
+
+        # Load game state if available
+        if loaded_state:
+            self.game_state.apply_state_dict(loaded_state)
 
         # HUD
         self.ui_panel = UIPanel(screen_width, screen_height)
@@ -524,6 +533,7 @@ class Game:
             gs.move_count += 1
             gs._visit(new_tile)
             self._on_enter_cell(new_tile)
+            self._autosave()
 
     def _on_enter_cell(self, pos: Position):
         """Handle items, pits, NPCs, exit at the new cell."""
@@ -808,6 +818,22 @@ class Game:
         self.message_text = text
         self.message_time = self.message_duration
 
+
+    def _autosave(self):
+        """Persist current game progress if repo + game_id are available."""
+        if not self.repo or not self.game_id:
+            return
+        try:
+            self.repo.save_game(
+                game_id=self.game_id,
+                state=self.game_state.to_state_dict(),
+                status="in_progress",
+            )
+        except Exception:
+            # Don't crash the game if saving fails
+            pass
+
+
     # ------------------------------------------------------------------
     # Update
     # ------------------------------------------------------------------
@@ -1091,6 +1117,7 @@ class Game:
                 f"C - Be cruel to {mobile.name}",
             ]
         lines = [
+            "ESC - Quit & Save",
             "Numpad 1-9 / Arrows — Move",
             f"H - Healing potion ({gs.healing_potions})",
             f"V - Vision potion ({gs.vision_potions})",
@@ -1762,6 +1789,7 @@ class Game:
             else:
                 self.update()
                 self.render()
+        self._autosave()
         pygame.quit()
         sys.exit()
 
