@@ -34,6 +34,7 @@ def run_start_menu(screen, repo, player):
     font_title = pygame.font.Font(None, 72)
     font_btn = pygame.font.Font(None, 44)
     font_sm = pygame.font.Font(None, 28)
+    font_xs = pygame.font.Font(None, 22)
 
     clock = pygame.time.Clock()
 
@@ -146,6 +147,13 @@ def run_start_menu(screen, repo, player):
 
             hint = font_sm.render("ESC: Quit", True, (180, 180, 200))
             screen.blit(hint, (20, h - 40))
+
+            dbg_hint = font_xs.render(
+                "Debug controls in game: F3 profiler on/off, F4 print summary, F5 restart 60s capture",
+                True,
+                (140, 140, 165),
+            )
+            screen.blit(dbg_hint, (20, h - 64))
 
         else:
             draw_title("Load Game")

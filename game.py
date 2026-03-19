@@ -8,6 +8,7 @@ Domain state lives in game_state.py (GameState, NPC_REGISTRY).
 """
 import math
 import json
+import time
 import pygame
 import sys
 import os
@@ -77,6 +78,8 @@ class Game:
     PLAYER_SPEED = LOCAL_SETTINGS.character_speed_tiles_per_second
     TARGET_FPS = max(1, LOCAL_SETTINGS.target_fps)
     BASE_ANIMATION_FPS = max(1, LOCAL_SETTINGS.animation_fps)
+    MAX_MOVEMENT_DT_S = 0.08  # Prevent large frame hitches from causing visible teleports.
+    AUTOSAVE_MIN_INTERVAL_S = 1.0  # Save cadence while idle and state is dirty.
     TILE_MARGIN  = 0.05  # stop this far from a blocked edge
     NEG_AXIS_COLLISION_BUFFER = 0.16  # extra stop buffer for NE/NW-side contacts
     FOG_OVERLAP_PX = 2
@@ -110,6 +113,8 @@ class Game:
         self.player_name = player_name
         self.game_id = game_id
         self.loaded_state = loaded_state
+        self._last_autosave_t: float = 0.0
+        self._autosave_dirty: bool = False
 
 
         # Load assets
@@ -123,6 +128,8 @@ class Game:
         self._scaled_assets_cache: dict = {}
         self._fog_overlap_cache: dict[tuple[str, int, int], pygame.Surface] = {}
         self._fog_exact_cache: dict[tuple[str, int, int], pygame.Surface] = {}
+        self._fog_layers_draw_cache: list[tuple[int, int, tuple[str, ...]]] = []
+        self._fog_layers_dirty: bool = True
 
         # Input
         self.keys_held: set[str] = set()
@@ -217,6 +224,26 @@ class Game:
             8: 'fog_n.png',
             9: 'fog_ne.png',
         }
+
+        # On-screen frame-time profiler (F3 toggles visibility).
+        self._profiler_enabled: bool = False
+        self._prof_font = pygame.font.Font(None, 20)
+        self._prof_frame_ms_raw: float = 0.0
+        self._prof_frame_ms_used: float = 0.0
+        self._prof_update_ms: float = 0.0
+        self._prof_render_ms: float = 0.0
+        self._prof_tick_ms: float = 0.0
+        self._prof_world_ms: float = 0.0
+        self._prof_fog_ms: float = 0.0
+        self._prof_ui_ms: float = 0.0
+        self._prof_overlay_ms: float = 0.0
+        self._prof_flip_ms: float = 0.0
+        self._prof_peak_capture_active: bool = False
+        self._prof_peak_capture_started_at: float = 0.0
+        self._prof_peak_capture_duration_s: float = 60.0
+        self._prof_peak_capture_top_n: int = 5
+        self._prof_peak_samples: dict[str, list[float]] = {}
+        self._profiler_start_peak_capture()
 
     # ------------------------------------------------------------------
     # Asset loading
@@ -318,6 +345,51 @@ class Game:
         self._fog_exact_cache[cache_key] = scaled
         return scaled
 
+    def _mark_fog_layers_dirty(self):
+        self._fog_layers_dirty = True
+
+    def _rebuild_fog_layers_draw_cache(self):
+        """Build fog overlay layers only when fog state changes."""
+        gs = self.game_state
+        fog_layers_by_pos: dict[Position, list[str]] = {}
+
+        def _add_layer(pos: Position, fog_key: str):
+            layers = fog_layers_by_pos.setdefault(pos, [])
+            if fog_key not in layers:
+                layers.append(fog_key)
+
+        border_map = [
+            ((-1, 0), 'fog_ne.png'),
+            ((0, 1), 'fog_se.png'),
+            ((1, 0), 'fog_sw.png'),
+            ((0, -1), 'fog_nw.png'),
+            ((-1, -1), 'fog_n.png'),
+            ((-1, 1), 'fog_e.png'),
+            ((1, 1), 'fog_s.png'),
+            ((1, -1), 'fog_w.png'),
+        ]
+
+        for fog_pos, fogged in gs.fog.items():
+            if not fogged:
+                continue
+            _add_layer(fog_pos, 'fog_c.png')
+            for (dr, dc), fog_key in border_map:
+                npos = Position(fog_pos.row + dr, fog_pos.col + dc)
+                if npos not in gs.fog:
+                    continue
+                if gs.is_fogged(npos):
+                    continue
+                _add_layer(npos, fog_key)
+
+        # Keep painter's order consistent with world tile rendering.
+        draw_layers: list[tuple[int, int, tuple[str, ...]]] = []
+        for pos, layers in fog_layers_by_pos.items():
+            draw_layers.append((pos.col, pos.row, tuple(layers)))
+        draw_layers.sort(key=lambda item: (item[0] + item[1], item[0]))
+
+        self._fog_layers_draw_cache = draw_layers
+        self._fog_layers_dirty = False
+
     # ------------------------------------------------------------------
     # Input
     # ------------------------------------------------------------------
@@ -374,6 +446,14 @@ class Game:
                     self.keys_held.clear()
                 elif event.key == pygame.K_ESCAPE:
                     self.running = False
+                elif event.key == pygame.K_F3:
+                    self._profiler_enabled = not self._profiler_enabled
+                elif event.key == pygame.K_F4:
+                    # Force-print whatever has been captured so far.
+                    self._profiler_emit_peak_summary(force=True)
+                elif event.key == pygame.K_F5:
+                    # Restart timed capture without restarting the game.
+                    self._profiler_start_peak_capture()
             elif event.type == pygame.KEYUP:
                 key_name = self._pygame_key_to_dir(event.key)
                 if key_name:
@@ -531,9 +611,10 @@ class Game:
         if new_tile != gs.pos:
             gs.pos = new_tile
             gs.move_count += 1
-            gs._visit(new_tile)
+            if gs._visit(new_tile):
+                self._mark_fog_layers_dirty()
             self._on_enter_cell(new_tile)
-            self._autosave()
+            self._mark_save_dirty()
 
     def _on_enter_cell(self, pos: Position):
         """Handle items, pits, NPCs, exit at the new cell."""
@@ -551,6 +632,7 @@ class Game:
                 self.dead = True
                 self.death_fade_time = 0
                 self.death_drip_time = 0
+                self._autosave_if_due(force=True)
                 return
 
         # Healing potion pickup
@@ -565,6 +647,12 @@ class Game:
             gs.vision_potions += 1
             self._show_message("Found vision potion!")
 
+        # Will potion pickup
+        if cell.has_will_potion and pos not in gs.consumed_potions:
+            gs.consumed_potions.add(pos)
+            gs.will_potions += 1
+            self._show_message("Found will potion!")
+
         # NPC greeting (first visit)
         npc_id = cell.npc_id
         if npc_id and npc_id in NPC_REGISTRY and npc_id not in gs.npc_greeted:
@@ -578,6 +666,7 @@ class Game:
             if gs.all_npcs_resolved():
                 gs.is_complete = True
                 self.won = True
+                self._autosave_if_due(force=True)
             else:
                 unresolved = sum(1 for ns in gs.npc_states.values() if not ns.resolved)
                 self._show_message(
@@ -792,6 +881,7 @@ class Game:
         gs.healing_potions -= 1
         heal = gs.rng.randint(5, 15)
         gs.hp = min(gs.max_hp, gs.hp + heal)
+        self._mark_save_dirty()
         self._show_message(f"Healed +{heal} HP")
 
     def _use_vision_potion(self):
@@ -800,6 +890,7 @@ class Game:
             self._show_message("No vision potions!")
             return
         gs.vision_potions -= 1
+        self._mark_save_dirty()
         if gs.clear_fog_nearest_cluster():
             self._show_message("Vision potion! Revealed nearby area.")
         else:
@@ -812,26 +903,41 @@ class Game:
             return
         gs.will_potions -= 1
         gs.will = min(gs.max_will, gs.will + 3)
+        self._mark_save_dirty()
         self._show_message(f"Will restored! Will: {gs.will}/{gs.max_will}")
 
     def _show_message(self, text: str):
         self.message_text = text
         self.message_time = self.message_duration
 
+    def _mark_save_dirty(self):
+        self._autosave_dirty = True
 
-    def _autosave(self):
+
+    def _autosave(self) -> bool:
         """Persist current game progress if repo + game_id are available."""
         if not self.repo or not self.game_id:
-            return
+            return False
         try:
             self.repo.save_game(
                 game_id=self.game_id,
                 state=self.game_state.to_state_dict(),
                 status="in_progress",
             )
+            return True
         except Exception:
             # Don't crash the game if saving fails
-            pass
+            return False
+
+    def _autosave_if_due(self, force: bool = False):
+        """Throttle autosave and avoid save I/O while continuously moving."""
+        if not force and not self._autosave_dirty:
+            return
+        now = time.perf_counter()
+        if force or (now - self._last_autosave_t) >= self.AUTOSAVE_MIN_INTERVAL_S:
+            if self._autosave():
+                self._last_autosave_t = now
+                self._autosave_dirty = False
 
 
     # ------------------------------------------------------------------
@@ -839,11 +945,15 @@ class Game:
     # ------------------------------------------------------------------
 
     def update(self):
+        upd_t0 = time.perf_counter()
         dt = self.clock.get_time()       # ms
-        dt_s = dt / 1000.0               # seconds
+        dt_s = min(dt / 1000.0, self.MAX_MOVEMENT_DT_S)  # seconds
+        self._prof_frame_ms_raw = float(dt)
+        self._prof_frame_ms_used = dt_s * 1000.0
 
         # Smooth per-frame movement
         self._update_movement(dt_s)
+        upd_t1 = time.perf_counter()
 
         # Mobile NPC AI
         gs = self.game_state
@@ -860,10 +970,17 @@ class Game:
                         gs.hp = max(0, gs.hp - 1)
                         npc.bite_cooldown = 3.0
                         self._show_message("Brian bites you! -1 HP")
+                        self._mark_save_dirty()
+        upd_t2 = time.perf_counter()
 
         # Animation
         self.animator.is_moving = bool(self.keys_held & self._ALL_DIR_KEYS)
         self.animator.update(dt)
+
+        # Save only while idle so movement frames never block on save I/O.
+        if not self.animator.is_moving:
+            self._autosave_if_due(force=False)
+        upd_t3 = time.perf_counter()
 
         if self.message_time > 0:
             self.message_time -= 1
@@ -885,13 +1002,20 @@ class Game:
             elif self.death_drip_time < self.death_drip_duration:
                 self.death_drip_time += 1
 
+        upd_t4 = time.perf_counter()
+        tick_t0 = time.perf_counter()
         self.clock.tick(self.TARGET_FPS)
+        tick_t1 = time.perf_counter()
+
+        self._prof_update_ms = (upd_t4 - upd_t0) * 1000.0
+        self._prof_tick_ms = (tick_t1 - tick_t0) * 1000.0
 
     # ------------------------------------------------------------------
     # Render
     # ------------------------------------------------------------------
 
     def render(self):
+        ren_t0 = time.perf_counter()
         self.screen.fill((0, 0, 0))
 
         TILE_W = self.tile_w
@@ -953,6 +1077,10 @@ class Game:
                     pa = self._get_asset('potion_t_s.png')
                     if pa:
                         self.screen.blit(pa, (int(sx - pa.get_width() // 2), int(sy - pa.get_height())))
+                if cell and cell.has_will_potion and pos not in gs.consumed_potions:
+                    pa = self._get_asset('potion_w_s.png') or self._get_asset('potion_t_s.png')
+                    if pa:
+                        self.screen.blit(pa, (int(sx - pa.get_width() // 2), int(sy - pa.get_height())))
 
                 # NPC marker (colored circle)
                 if cell and cell.npc_id and cell.npc_id in NPC_REGISTRY:
@@ -966,14 +1094,6 @@ class Game:
                         (int(sx), int(sy - TILE_H // 2)),
                         10,
                     )
-
-                # Entrance door
-                if cell and cell.kind == CellKind.START:
-                    door = self._get_asset('nw_door_o_s.png')
-                    if door:
-                        dx = int(sx - door.get_width() // 2)
-                        dy = int(sy - door.get_height())
-                        doors_to_draw.append((door, dx, dy))
 
                 # Exit door
                 if cell and cell.kind == CellKind.EXIT:
@@ -1024,50 +1144,20 @@ class Game:
         # Overlay doors
         for surf, dx, dy in doors_to_draw:
             self.screen.blit(surf, (dx, dy))
+        ren_t1 = time.perf_counter()
 
-        # Fog pass (debugger-style): draw fog_c at fogged cells, then border overlays
-        # on neighboring non-fog cells around each fog_c source tile.
-        fog_layers_by_pos: dict[Position, list[str]] = {}
+        # Fog pass: layer list is cached and rebuilt only after fog changes.
+        if self._fog_layers_dirty:
+            self._rebuild_fog_layers_draw_cache()
 
-        def _add_layer(pos: Position, fog_key: str):
-            layers = fog_layers_by_pos.setdefault(pos, [])
-            if fog_key not in layers:
-                layers.append(fog_key)
-
-        border_map = [
-            ((-1, 0), 'fog_ne.png'),
-            ((0, 1), 'fog_se.png'),
-            ((1, 0), 'fog_sw.png'),
-            ((0, -1), 'fog_nw.png'),
-            ((-1, -1), 'fog_n.png'),
-            ((-1, 1), 'fog_e.png'),
-            ((1, 1), 'fog_s.png'),
-            ((1, -1), 'fog_w.png'),
-        ]
-
-        for fog_pos, fogged in gs.fog.items():
-            if not fogged:
-                continue
-            _add_layer(fog_pos, 'fog_c.png')
-            for (dr, dc), fog_key in border_map:
-                npos = Position(fog_pos.row + dr, fog_pos.col + dc)
-                if npos not in gs.fog:
-                    continue
-                if gs.is_fogged(npos):
-                    continue
-                _add_layer(npos, fog_key)
-
-        for col, row, _tt in self._sorted_tiles:
-            pos = Position(row, col)
-            fog_layers = fog_layers_by_pos.get(pos)
-            if not fog_layers:
-                continue
+        for col, row, fog_layers in self._fog_layers_draw_cache:
             sx = (col - row) * (TILE_W // 2) + self.camera_x
             sy = (col + row) * (TILE_H // 2) + self.camera_y + dungeon_y_offset
             for fog_key in fog_layers:
                 fog = self._get_fog_asset_exact(fog_key)
                 if fog:
                     self.screen.blit(fog, (round(sx - fog.get_width() / 2), round(sy - fog.get_height())))
+        ren_t2 = time.perf_counter()
 
         # UI overlays — HUD panel (minimap, bars, portrait)
         self.ui_panel.draw(
@@ -1076,6 +1166,7 @@ class Game:
             self.maze, NPC_REGISTRY,
         )
         self._draw_controls()
+        ren_t3 = time.perf_counter()
 
         if self.message_time > 0 and self.message_text:
             self._draw_message()
@@ -1089,7 +1180,20 @@ class Game:
         if self.dead:
             self._draw_death_screen()
 
+        self._draw_frame_profiler()
+        ren_t4 = time.perf_counter()
+
+        flip_t0 = time.perf_counter()
         pygame.display.flip()
+        flip_t1 = time.perf_counter()
+
+        self._prof_world_ms = (ren_t1 - ren_t0) * 1000.0
+        self._prof_fog_ms = (ren_t2 - ren_t1) * 1000.0
+        self._prof_ui_ms = (ren_t3 - ren_t2) * 1000.0
+        self._prof_overlay_ms = (ren_t4 - ren_t3) * 1000.0
+        self._prof_flip_ms = (flip_t1 - flip_t0) * 1000.0
+        self._prof_render_ms = (flip_t1 - ren_t0) * 1000.0
+        self._profiler_update_peak_capture()
 
     # ------------------------------------------------------------------
     # UI drawing helpers
@@ -1147,6 +1251,127 @@ class Game:
         for i, line in enumerate(lines):
             txt = font.render(line, True, (255, 255, 255))
             self.screen.blit(txt, (bx + padding, by + padding + i * line_height))
+
+    def _draw_frame_profiler(self):
+        """Draw a compact profiler with frame and phase timings."""
+        if not self._profiler_enabled:
+            return
+
+        raw = self._prof_frame_ms_raw
+        used = self._prof_frame_ms_used
+        fps = (1000.0 / raw) if raw > 0.0 else 0.0
+
+        lines = [
+            f"Profiler (F3): {fps:5.1f} FPS",
+            f"frame(raw):  {raw:6.2f} ms",
+            f"frame(used): {used:6.2f} ms",
+            f"update:      {self._prof_update_ms:6.2f} ms",
+            f"render:      {self._prof_render_ms:6.2f} ms",
+            f"tick:        {self._prof_tick_ms:6.2f} ms",
+            f"world:       {self._prof_world_ms:6.2f} ms",
+            f"fog:         {self._prof_fog_ms:6.2f} ms",
+            f"ui:          {self._prof_ui_ms:6.2f} ms",
+            f"overlay:     {self._prof_overlay_ms:6.2f} ms",
+            f"flip:        {self._prof_flip_ms:6.2f} ms",
+        ]
+
+        font = self._prof_font
+        padding = 8
+        line_h = font.get_height() + 2
+        box_w = max(font.size(line)[0] for line in lines) + padding * 2
+        box_h = line_h * len(lines) + padding * 2
+        bx = self.screen_width - box_w - 12
+        by = self.screen_height - box_h - 12
+
+        panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
+        panel.fill((8, 10, 14, 190))
+        self.screen.blit(panel, (bx, by))
+        pygame.draw.rect(self.screen, (140, 160, 180), (bx, by, box_w, box_h), 1)
+
+        for i, line in enumerate(lines):
+            color = (210, 230, 255) if i == 0 else (220, 220, 220)
+            txt = font.render(line, True, color)
+            self.screen.blit(txt, (bx + padding, by + padding + i * line_h))
+
+    def _profiler_start_peak_capture(self):
+        """Start a timed peak capture to print terminal-readable diagnostics."""
+        self._prof_peak_capture_active = True
+        self._prof_peak_capture_started_at = time.perf_counter()
+        self._prof_peak_samples = {
+            'frame_raw_ms': [],
+            'frame_used_ms': [],
+            'update_ms': [],
+            'render_ms': [],
+            'tick_ms': [],
+            'world_ms': [],
+            'fog_ms': [],
+            'ui_ms': [],
+            'overlay_ms': [],
+            'flip_ms': [],
+        }
+        print(
+            "PROFILER_CAPTURE_BEGIN duration_s=60 top_n=5 "
+            f"seed={self.seed}",
+            flush=True,
+        )
+
+    def _profiler_emit_peak_summary(self, force: bool = False):
+        if not self._prof_peak_samples:
+            return
+
+        elapsed = time.perf_counter() - self._prof_peak_capture_started_at
+        duration = self._prof_peak_capture_duration_s
+        if not force and elapsed < duration:
+            return
+
+        mode = "forced" if force and elapsed < duration else "timed"
+        print(
+            "PROFILER_CAPTURE_SUMMARY "
+            f"mode={mode} elapsed_s={elapsed:.1f} top_n={self._prof_peak_capture_top_n}",
+            flush=True,
+        )
+        order = [
+            'frame_raw_ms', 'frame_used_ms', 'update_ms', 'render_ms', 'tick_ms',
+            'world_ms', 'fog_ms', 'ui_ms', 'overlay_ms', 'flip_ms',
+        ]
+        for key in order:
+            peaks = self._prof_peak_samples.get(key, [])
+            if not peaks:
+                print(f"  {key}: no-samples", flush=True)
+                continue
+            vals = ', '.join(f"{v:.2f}" for v in peaks)
+            print(f"  {key}: {vals}", flush=True)
+        print("PROFILER_CAPTURE_END", flush=True)
+        self._prof_peak_capture_active = False
+        self._prof_peak_samples = {}
+
+    def _profiler_track_peak(self, key: str, value: float):
+        peaks = self._prof_peak_samples.setdefault(key, [])
+        n = self._prof_peak_capture_top_n
+        if len(peaks) < n:
+            peaks.append(value)
+            peaks.sort(reverse=True)
+            return
+        if peaks and value > peaks[-1]:
+            peaks[-1] = value
+            peaks.sort(reverse=True)
+
+    def _profiler_update_peak_capture(self):
+        if not self._prof_peak_capture_active:
+            return
+
+        self._profiler_track_peak('frame_raw_ms', self._prof_frame_ms_raw)
+        self._profiler_track_peak('frame_used_ms', self._prof_frame_ms_used)
+        self._profiler_track_peak('update_ms', self._prof_update_ms)
+        self._profiler_track_peak('render_ms', self._prof_render_ms)
+        self._profiler_track_peak('tick_ms', self._prof_tick_ms)
+        self._profiler_track_peak('world_ms', self._prof_world_ms)
+        self._profiler_track_peak('fog_ms', self._prof_fog_ms)
+        self._profiler_track_peak('ui_ms', self._prof_ui_ms)
+        self._profiler_track_peak('overlay_ms', self._prof_overlay_ms)
+        self._profiler_track_peak('flip_ms', self._prof_flip_ms)
+
+        self._profiler_emit_peak_summary(force=False)
 
     def _draw_message(self):
         font = pygame.font.Font(None, 48)
@@ -1273,12 +1498,14 @@ class Game:
             max_room_size=LOCAL_SETTINGS.dungeon_max_room_size,
         )
         self.game_state = GameState(self.maze, new_seed)
+        self._mark_fog_layers_dirty()
         self._sorted_tiles = self._build_sorted_tile_list()
         self.animator.reset()
         start = self.game_state.pos
         self.player_row = start.row + 0.5
         self.player_col = start.col + 0.5
         self.keys_held.clear()
+        self._profiler_start_peak_capture()
 
     # ------------------------------------------------------------------
     # Debug mode
@@ -1789,7 +2016,8 @@ class Game:
             else:
                 self.update()
                 self.render()
-        self._autosave()
+        self._profiler_emit_peak_summary(force=True)
+        self._autosave_if_due(force=True)
         pygame.quit()
         sys.exit()
 
@@ -1812,7 +2040,8 @@ class Game:
 
         self.game_state.pos = next_pos
         self.game_state.move_count += 1
-        self.game_state._visit(next_pos)
+        if self.game_state._visit(next_pos):
+            self._mark_fog_layers_dirty()
 
         # Keep render coordinates synced with tile position
         self.player_row = next_pos.row + 0.5

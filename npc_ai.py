@@ -149,7 +149,7 @@ class MobileNPC:
 def create_brian_wererat(pos: Position) -> MobileNPC:
     npc = MobileNPC(
         npc_id="brian_wererat",
-        name="Brian the Were-Rat",
+        name="Torren the Guard",
         behavior="chase",
         speed=2.8,
         activation_range=8,
@@ -163,7 +163,7 @@ def create_brian_wererat(pos: Position) -> MobileNPC:
 def create_floating_shoe(pos: Position) -> MobileNPC:
     npc = MobileNPC(
         npc_id="floating_shoe",
-        name="Floating Shoe",
+        name="Vargo the Merchant",
         behavior="flee",
         speed=2.5,
         flee_trigger_range=2,
@@ -324,7 +324,7 @@ def interact_mobile_npc(npc: MobileNPC, side: str, game_state) -> str:
 
 
 def _interact_brian(npc: MobileNPC, side: str, gs) -> str:
-    """Brian the Were-Rat: K x3 = 10 will potions. C = 70 damage."""
+    """Torren the Guard: K x3 = 10 will potions. C = 70 damage."""
     if side == "kind":
         npc.kindness_count += 1
         remaining = 3 - npc.kindness_count
@@ -334,40 +334,39 @@ def _interact_brian(npc: MobileNPC, side: str, gs) -> str:
             npc.active = False
             gs.will_potions += 10
             return (
-                "Brian the Were-Rat calms down and shifts back to human form.\n"
-                '"Thank you for your kindness... take these."\n'
-                "[Brian gives you 10 will potions! Press W to use.]"
+                "Torren lowers his spear and straightens his posture.\n"
+                '"You showed honor. Take these and keep moving."\n'
+                "[Torren gives you 10 will potions! Press W to use.]"
             )
         else:
             return (
-                f"Brian pauses, confused by your kindness.\n"
-                f'"Why... why are you nice to me?" ({remaining} more to go)'
+                f"Torren hesitates, surprised by your restraint.\n"
+                f'"Not many travelers choose mercy down here." ({remaining} more to go)'
             )
     else:  # cruel
         damage = 70
         gs.hp = max(0, gs.hp - damage)
         return (
-            f"Brian lunges! His claws tear into you for {damage} damage!\n"
-            '"You shouldn\'t have done that..."'
+            f"Torren strikes fast with his spear and hits you for {damage} damage!\n"
+            '"Stand down, or the next one goes through your armor."'
         )
 
 
 def _interact_shoe(npc: MobileNPC, side: str, gs) -> str:
-    """Floating Shoe: K = catch (3 vision potions + lore). C = flees faster."""
+    """Vargo merchant encounter on the floating_shoe slot."""
     if side == "kind":
         npc.resolved = True
         npc.reward_given = True
         npc.active = False
         gs.vision_potions += 3
         return (
-            "You gently catch the Floating Shoe. It settles in your hands.\n"
-            "A whisper echoes: \"I once belonged to a wizard who lost his way.\n"
-            "He enchanted me to find the exit, but I forgot which way was out.\"\n"
-            "[Found 3 vision potions!]"
+            "Vargo smooths his coat and gives a polished smile.\n"
+            '"A wise customer and a fair deal. Take these for the road."\n'
+            "[Vargo gives you 3 vision potions!]"
         )
     else:  # cruel
         npc.speed = min(npc.speed + 0.5, 4.0)  # temporarily faster
         return (
-            "You swat at the Floating Shoe! It kicks into high gear,\n"
-            "zooming away even faster than before."
+            "Vargo snaps his ledger shut and backs away quickly.\n"
+            '"Then there is no business to be done here."'
         )

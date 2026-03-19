@@ -22,12 +22,18 @@ from npc_ai import (
 )
 from npc_data import (
     NPCState,
-    OLD_WEARY_GREETING, OLD_WEARY_DESCRIPTION,
-    OLD_WEARY_CRUEL_ACTIONS, OLD_WEARY_KIND_ACTIONS,
-    OLD_WEARY_CRUEL_REACTIONS, OLD_WEARY_KIND_REACTIONS,
     MESSY_GOBLIN_GREETING, MESSY_GOBLIN_DESCRIPTION,
     MESSY_GOBLIN_CRUEL_ACTIONS, MESSY_GOBLIN_KIND_ACTIONS,
     MESSY_GOBLIN_CRUEL_REACTIONS, MESSY_GOBLIN_KIND_REACTIONS,
+    LILA_GREETING, LILA_DESCRIPTION,
+    LILA_CRUEL_ACTIONS, LILA_KIND_ACTIONS,
+    LILA_CRUEL_REACTIONS, LILA_KIND_REACTIONS,
+    GIANT_GREETING, GIANT_DESCRIPTION,
+    GIANT_CRUEL_ACTIONS, GIANT_KIND_ACTIONS,
+    GIANT_CRUEL_REACTIONS, GIANT_KIND_REACTIONS,
+    KNIGHT_GREETING, KNIGHT_DESCRIPTION,
+    KNIGHT_CRUEL_ACTIONS, KNIGHT_KIND_ACTIONS,
+    KNIGHT_CRUEL_REACTIONS, KNIGHT_KIND_REACTIONS,
 )
 
 
@@ -36,20 +42,8 @@ from npc_data import (
 # ---------------------------------------------------------------------------
 
 NPC_REGISTRY: dict[str, dict] = {
-    "old_weary": {
-        "name": "Old Weary",
-        "greeting": OLD_WEARY_GREETING,
-        "description": OLD_WEARY_DESCRIPTION,
-        "cruel_actions": OLD_WEARY_CRUEL_ACTIONS,
-        "kind_actions": OLD_WEARY_KIND_ACTIONS,
-        "cruel_reactions": OLD_WEARY_CRUEL_REACTIONS,
-        "kind_reactions": OLD_WEARY_KIND_REACTIONS,
-        "win_direction": "cruel",
-        "win_threshold": -3,
-        "fail_threshold": 3,
-    },
     "messy_goblin": {
-        "name": "Messy Goblin",
+        "name": "Bazzitha",
         "greeting": MESSY_GOBLIN_GREETING,
         "description": MESSY_GOBLIN_DESCRIPTION,
         "cruel_actions": MESSY_GOBLIN_CRUEL_ACTIONS,
@@ -62,36 +56,36 @@ NPC_REGISTRY: dict[str, dict] = {
     },
     "lila": {
         "name": "Lila",
-        "greeting": MESSY_GOBLIN_GREETING,
-        "description": MESSY_GOBLIN_DESCRIPTION,
-        "cruel_actions": MESSY_GOBLIN_CRUEL_ACTIONS,
-        "kind_actions": MESSY_GOBLIN_KIND_ACTIONS,
-        "cruel_reactions": MESSY_GOBLIN_CRUEL_REACTIONS,
-        "kind_reactions": MESSY_GOBLIN_KIND_REACTIONS,
+        "greeting": LILA_GREETING,
+        "description": LILA_DESCRIPTION,
+        "cruel_actions": LILA_CRUEL_ACTIONS,
+        "kind_actions": LILA_KIND_ACTIONS,
+        "cruel_reactions": LILA_CRUEL_REACTIONS,
+        "kind_reactions": LILA_KIND_REACTIONS,
         "win_direction": "kind",
         "win_threshold": 3,
         "fail_threshold": -3,
     },
     "giant": {
-        "name": "Giant",
-        "greeting": MESSY_GOBLIN_GREETING,
-        "description": MESSY_GOBLIN_DESCRIPTION,
-        "cruel_actions": MESSY_GOBLIN_CRUEL_ACTIONS,
-        "kind_actions": MESSY_GOBLIN_KIND_ACTIONS,
-        "cruel_reactions": MESSY_GOBLIN_CRUEL_REACTIONS,
-        "kind_reactions": MESSY_GOBLIN_KIND_REACTIONS,
+        "name": "Grun",
+        "greeting": GIANT_GREETING,
+        "description": GIANT_DESCRIPTION,
+        "cruel_actions": GIANT_CRUEL_ACTIONS,
+        "kind_actions": GIANT_KIND_ACTIONS,
+        "cruel_reactions": GIANT_CRUEL_REACTIONS,
+        "kind_reactions": GIANT_KIND_REACTIONS,
         "win_direction": "kind",
         "win_threshold": 3,
         "fail_threshold": -3,
     },
     "knight": {
-        "name": "Knight",
-        "greeting": MESSY_GOBLIN_GREETING,
-        "description": MESSY_GOBLIN_DESCRIPTION,
-        "cruel_actions": MESSY_GOBLIN_CRUEL_ACTIONS,
-        "kind_actions": MESSY_GOBLIN_KIND_ACTIONS,
-        "cruel_reactions": MESSY_GOBLIN_CRUEL_REACTIONS,
-        "kind_reactions": MESSY_GOBLIN_KIND_REACTIONS,
+        "name": "Sir Bramble",
+        "greeting": KNIGHT_GREETING,
+        "description": KNIGHT_DESCRIPTION,
+        "cruel_actions": KNIGHT_CRUEL_ACTIONS,
+        "kind_actions": KNIGHT_KIND_ACTIONS,
+        "cruel_reactions": KNIGHT_CRUEL_REACTIONS,
+        "kind_reactions": KNIGHT_KIND_REACTIONS,
         "win_direction": "kind",
         "win_threshold": 3,
         "fail_threshold": -3,
@@ -156,18 +150,30 @@ class GameState:
 
     # -- fog helpers --
 
-    def _visit(self, pos: Position):
+    def _visit(self, pos: Position) -> bool:
         self.visited.add(pos)
-        self.clear_fog_radius(pos, radius=2)
+        return self.clear_fog_radius(pos, radius=2)
 
     def clear_fog_at(self, pos: Position):
         if pos in self.fog:
             self.fog[pos] = False
 
-    def clear_fog_radius(self, center: Position, radius: int = 2):
-        for pos, _fogged in self.fog.items():
-            if abs(pos.row - center.row) + abs(pos.col - center.col) <= radius:
-                self.fog[pos] = False
+    def clear_fog_radius(self, center: Position, radius: int = 2) -> bool:
+        """Reveal a Manhattan-radius diamond around center.
+
+        Returns True if at least one tile changed from fogged to revealed.
+        """
+        changed = False
+        for dr in range(-radius, radius + 1):
+            row = center.row + dr
+            remaining = radius - abs(dr)
+            for dc in range(-remaining, remaining + 1):
+                col = center.col + dc
+                pos = Position(row, col)
+                if pos in self.fog and self.fog[pos]:
+                    self.fog[pos] = False
+                    changed = True
+        return changed
 
     def clear_fog_nearest_cluster(self) -> bool:
         """Reveal nearest cluster of fogged cells (vision potion)."""
@@ -178,8 +184,7 @@ class GameState:
             fogged,
             key=lambda p: abs(p.row - self.pos.row) + abs(p.col - self.pos.col),
         )
-        self.clear_fog_radius(nearest, radius=4)
-        return True
+        return self.clear_fog_radius(nearest, radius=4)
 
     def is_fogged(self, pos: Position) -> bool:
         return self.fog.get(pos, True)
