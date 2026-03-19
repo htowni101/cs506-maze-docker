@@ -83,6 +83,7 @@ class CellSpec:
     has_pit: bool = False
     has_healing_potion: bool = False
     has_vision_potion: bool = False
+    has_will_potion: bool = False
     tile_type: Optional[str] = None         # e.g. "floor", "ne_wall", "sw_dead"
 
     # --- convenience helpers (no print!) ---
@@ -184,7 +185,7 @@ def build_3x3_maze() -> Maze:
 
     Layout (row, col)::
 
-        (0,0) START ──► (0,1)       ──► (0,2) OLD WEARY
+        (0,0) START ──► (0,1)       ──► (0,2) GIANT
           │               ║ wall            │
           ▼               ║                 ▼
         (1,0) PIT   ──► (1,1)       ──► (1,2) heal potion
@@ -198,7 +199,7 @@ def build_3x3_maze() -> Maze:
       - (2,0) ↔ (2,1)  — forces the player to take a longer path
 
     NPCs:
-      - Old Weary at (0,2)  — guard the lever / portcullis
+    - Giant at (0,2)
       - Messy Goblin at (2,1)  — knows the door password
     """
     cells: dict[Position, CellSpec] = {}
@@ -215,7 +216,7 @@ def build_3x3_maze() -> Maze:
             cells[pos] = CellSpec(pos=pos, kind=kind)
 
     # Place NPCs
-    cells[Position(0, 2)].npc_id = "old_weary"
+    cells[Position(0, 2)].npc_id = "giant"
     cells[Position(2, 1)].npc_id = "messy_goblin"
 
     # Place a pit
@@ -291,13 +292,17 @@ def build_square_maze(size: int, seed: int) -> Maze:
         else:
             stack.pop()
 
+    # Reassert start/exit kinds so random placement never overrides them.
+    cells[Position(0, 0)].kind = CellKind.START
+    cells[Position(size - 1, size - 1)].kind = CellKind.EXIT
+
     # Place NPCs on random non-start, non-exit cells
     interior = [
         p for p in cells
         if p != Position(0, 0) and p != Position(size - 1, size - 1)
     ]
     rng.shuffle(interior)
-    npc_ids = ["old_weary", "messy_goblin", "lila", "giant", "knight"]
+    npc_ids = ["messy_goblin", "lila", "giant", "knight"]
     for i, npc_id in enumerate(npc_ids):
         if i < len(interior):
             cells[interior[i]].npc_id = npc_id
@@ -308,6 +313,15 @@ def build_square_maze(size: int, seed: int) -> Maze:
         cells[remaining[0]].has_pit = True
     if len(remaining) > 1:
         cells[remaining[1]].has_healing_potion = True
+
+    # Randomly place up to five will potions on open floor cells.
+    will_candidates = [
+        p for p in remaining
+        if not cells[p].has_pit and not cells[p].has_healing_potion and not cells[p].has_vision_potion
+    ]
+    rng.shuffle(will_candidates)
+    for pos in will_candidates[:5]:
+        cells[pos].has_will_potion = True
 
     return Maze(
         maze_id=f"maze-{size}x{size}-seed{seed}",
@@ -402,9 +416,13 @@ def build_dungeon_maze(
         tile_type=cells[exit_pos].tile_type,
     )
 
+    # Safety net: every generated level must contain an explicit exit tile.
+    if not any(spec.kind == CellKind.EXIT for spec in cells.values()):
+        cells[exit_pos].kind = CellKind.EXIT
+
     # Place NPCs in intermediate rooms
     rng = random.Random(seed)
-    npc_ids = ["old_weary", "messy_goblin", "lila", "giant", "knight"]
+    npc_ids = ["messy_goblin", "lila", "giant", "knight"]
     npc_rooms = rooms[1:-1] if len(rooms) > 2 else rooms[1:] if len(rooms) > 1 else []
     rng.shuffle(npc_rooms)
     used_npc_positions: set[Position] = set()
@@ -445,6 +463,20 @@ def build_dungeon_maze(
     if len(item_rooms) > 1:
         heal_pos = Position(item_rooms[1].center_y, item_rooms[1].center_x)
         cells[heal_pos].has_healing_potion = True
+
+    # Randomly place up to five will potions on free floor cells.
+    will_candidates = [
+        pos for pos, spec in cells.items()
+        if pos != start
+        and pos != exit_pos
+        and spec.npc_id is None
+        and not spec.has_pit
+        and not spec.has_healing_potion
+        and not spec.has_vision_potion
+    ]
+    rng.shuffle(will_candidates)
+    for pos in will_candidates[:5]:
+        cells[pos].has_will_potion = True
 
     maze_id = f"dungeon-{width}x{height}-seed{seed}"
     return Maze(

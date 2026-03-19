@@ -582,6 +582,51 @@ class SqliteGameRepository(GameRepository):
                 created_at=row.created_at, updated_at=row.updated_at,
             )
 
+
+    def list_games_for_player(
+        self,
+        player_id: str,
+        *,
+        status: str | None = "in_progress",
+        limit: int = 20,
+    ) -> list[GameRecord]:
+        """
+        Returns most-recent games for a player (used by the Load Game menu).
+        By default shows only in-progress saves.
+        """
+        with self._session() as s:
+            stmt = select(GameTable).where(GameTable.player_id == player_id)
+
+            if status is not None:
+                stmt = stmt.where(GameTable.status == status)
+
+            stmt = stmt.order_by(GameTable.updated_at.desc()).limit(limit)
+
+            rows = s.exec(stmt).all()
+
+            return [
+                GameRecord(
+                    id=r.id, player_id=r.player_id,
+                    maze_id=r.maze_id, maze_version=r.maze_version,
+                    state=r.state, status=r.status,
+                    created_at=r.created_at, updated_at=r.updated_at,
+                )
+                for r in rows
+            ]
+
+
+    def get_latest_game_for_player(
+        self,
+        player_id: str,
+        *,
+        status: str | None = "in_progress",
+    ) -> Optional[GameRecord]:
+        """
+        Returns the newest game for Continue.
+        """
+        games = self.list_games_for_player(player_id, status=status, limit=1)
+        return games[0] if games else None
+
     def save_game(
         self,
         game_id: str,

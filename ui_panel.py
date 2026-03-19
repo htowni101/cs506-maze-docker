@@ -68,7 +68,21 @@ class UIPanel:
 
         # Load face PNGs
         self._portraits: dict[str, pygame.Surface] = {}
+        self._portrait_scaled_cache: dict[int, pygame.Surface] = {}
+        self._maze_npc_cells_cache: dict[str, list[tuple[str, Position]]] = {}
+        self._font_bar = pygame.font.Font(None, 20)
+        self._font_name = pygame.font.Font(None, 22)
         self._load_portraits()
+
+    def _npc_cells_for_maze(self, maze: Maze) -> list[tuple[str, Position]]:
+        """Return cached list of static NPC (npc_id, position) for a maze."""
+        maze_key = getattr(maze, "maze_id", f"maze-{id(maze)}")
+        cached = self._maze_npc_cells_cache.get(maze_key)
+        if cached is not None:
+            return cached
+        npc_cells = [(cell.npc_id, cell.pos) for cell in maze.all_cells() if cell.npc_id]
+        self._maze_npc_cells_cache[maze_key] = npc_cells
+        return npc_cells
 
     # ------------------------------------------------------------------
     # Portrait loading
@@ -158,7 +172,7 @@ class UIPanel:
         label: str,
     ):
         """Draw a bar with *BAR_SEGMENTS* notches."""
-        font = pygame.font.Font(None, 20)
+        font = self._font_bar
         seg_w = self.BAR_WIDTH // self.BAR_SEGMENTS
         total_w = seg_w * self.BAR_SEGMENTS
 
@@ -243,11 +257,11 @@ class UIPanel:
         pygame.draw.circle(panel, (0, 255, 100), (px, py), dot_r)
 
         # NPC dots (only if tile is revealed)
-        for cell in game_state.maze.all_cells():
-            if cell.npc_id and not game_state.is_fogged(cell.pos):
-                nx = int(ox + cell.pos.col * cell_sz)
-                ny = int(oy + cell.pos.row * cell_sz)
-                npc_s = game_state.npc_states.get(cell.npc_id)
+        for npc_id, npc_pos in self._npc_cells_for_maze(game_state.maze):
+            if npc_id and not game_state.is_fogged(npc_pos):
+                nx = int(ox + npc_pos.col * cell_sz)
+                ny = int(oy + npc_pos.row * cell_sz)
+                npc_s = game_state.npc_states.get(npc_id)
                 if npc_s and npc_s.resolved:
                     dot_col = (100, 255, 100)
                 else:
@@ -300,14 +314,18 @@ class UIPanel:
             portrait = self._portraits.get("unknown.png")
 
         if portrait:
-            scaled = pygame.transform.smoothscale(portrait, (size, size))
+            pid = id(portrait)
+            scaled = self._portrait_scaled_cache.get(pid)
+            if scaled is None:
+                scaled = pygame.transform.smoothscale(portrait, (size, size))
+                self._portrait_scaled_cache[pid] = scaled
             panel.blit(scaled, (0, 0))
 
         surface.blit(panel, (bx, by))
         pygame.draw.rect(surface, (160, 160, 160), (bx, by, size, size), 1)
 
         # Name label
-        font = pygame.font.Font(None, 22)
+        font = self._font_name
         label = npc_name if npc_name else "???"
         txt = font.render(label, True, (220, 220, 220))
         tr = txt.get_rect(centerx=bx + size // 2, top=by + size + 2)
@@ -346,10 +364,13 @@ class UIPanel:
         )
 
         # -- NPC Portrait (bottom-right) --
-        nearby = self.nearest_npc_in_range(
-            player_row, player_col, maze,
-            game_state.npc_states, radius=self.NPC_RANGE,
-        )
+        nearby = None
+        best_dist = math.inf
+        for npc_id, npc_pos in self._npc_cells_for_maze(maze):
+            dist = abs(npc_pos.row - player_row) + abs(npc_pos.col - player_col)
+            if dist <= self.NPC_RANGE and dist < best_dist:
+                best_dist = dist
+                nearby = (npc_id, npc_pos)
         if nearby:
             npc_id, _pos = nearby
             npc_state = game_state.npc_states.get(npc_id)
