@@ -19,3 +19,11 @@ I ran an AI code review with the prompt to act as a Senior Staff Engineer and ev
 I chose to reject the refactor for the current MVP. I rejected it because we want to stabilize integration before changing peristence contracts: the integrated CLI MVP is the current priority and I want to minimize destabilizing changes during resubmission. The existing boundaries are currently understandable and enforceable (maze remains independent, persistence is accessed through the repo), and the suggested cleanup is a strong candidate for a future iteration once the MVP is stable and tests are updated to reflect the simplified snapshot contract.
 
 
+---
+
+## Docker Instructions (Assignment 2)
+
+### Build the Image
+From the repository root:
+```bash
+docker build -f Dockerfiles/Dockerfile -t maze .
